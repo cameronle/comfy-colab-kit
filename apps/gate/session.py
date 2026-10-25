@@ -14,7 +14,6 @@ import asyncio
 import io
 import json
 import logging
-import re
 import shutil
 import tarfile
 import tempfile
@@ -30,23 +29,10 @@ from .colab import ColabError, ColabRunner
 from .config import Settings, read_secret_file
 from .plan import build_fetch_plan, build_plan
 from .profiles import Profile
+from .redaction import redact_secrets
 from .state import BOOT_STATES, Event, Machine, State
 
 log = logging.getLogger("gate.session")
-
-_SECRET_PATTERNS = [
-    re.compile(r"Bearer\s+[A-Za-z0-9_\-\.]{20,}", re.IGNORECASE),
-    re.compile(r"hf_[A-Za-z0-9]{20,}"),
-    re.compile(r"sk_agent_[A-Za-z0-9]{20,}"),
-    re.compile(r"ey[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}"),
-    re.compile(r"(?:HF_TOKEN)['\":= ]+([A-Za-z0-9_\-\.]{20,})"),
-]
-
-
-def redact_secrets(text: str) -> str:
-    for pat in _SECRET_PATTERNS:
-        text = pat.sub("[REDACTED_SECRET]", text)
-    return text
 
 
 def _find_repo_root() -> Path:
@@ -105,7 +91,7 @@ class Broadcaster:
 
     def publish(self, kind: str, data: Any) -> None:
         if kind == "log":
-            s = str(data)
+            s = data = redact_secrets(str(data))
             self.logs.append(s)
             self.total_logs += 1
             if self.on_log:
@@ -224,7 +210,7 @@ class Session:
             except ValueError:
                 st = State.SLEEPING
             m = self.machine
-            m.state, m.profile, m.reason = st, d.get("profile"), d.get("reason", "")
+            m.state, m.profile, m.reason = st, d.get("profile"), redact_secrets(str(d.get("reason") or ""))
             m.since, m.session_started = d.get("since", self.clock()), d.get("session_started")
             m.extends_used = int(d.get("extends_used", 0))
             self.workflows = d.get("workflows")
@@ -243,7 +229,7 @@ class Session:
                 self.bus.total_logs = len(lines)
                 maxlen = self.bus.logs.maxlen or 1000
                 for line in lines[-maxlen:]:
-                    self.bus.logs.append(line)
+                    self.bus.logs.append(redact_secrets(line))
             except Exception as e:
                 log.warning("failed to restore logs from %s: %s", self.log_file, e)
 

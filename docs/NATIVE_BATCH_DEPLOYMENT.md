@@ -100,6 +100,15 @@ tool_timeout_sec = 3600
 
 Load `CKIT_TOKEN` from your private ckit endpoint configuration into the environment of the Codex process. Do not inline it into TOML, process arguments, repository files or messages. Configure only one entry named `comfy`—choose stdio or HTTP, not both. Long tool timeouts accommodate cold starts but do not authorize spending.
 
+## Batch cold-start and failure handling
+
+- Setup creates the task directory before both fresh setup and the reused-runtime shortcut. Dispatch also idempotently prepares task/input parents before upload; the official CLI Contents API cannot create missing parent directories.
+- The headless adapter applies the profile's ComfyUI flags before importing model/execution modules, supplies the cache headroom parameters required by the pinned ComfyUI revision, and bridges sampling progress without starting ComfyUI's HTTP server or encoding preview images.
+- Runtime proxy credentials in HTTP-error query strings are sanitized before truncation, logging, SSE, job persistence and history/summary responses. Restored historical errors/logs are also sanitized before serving them.
+- CLI command cancellation, stream closure and timeouts kill and reap the local child process. Stream execution has a local deadline in addition to the notebook timeout. Killing the local CLI is **not** proof that the remote GPU stopped; use the normal stop-and-read-back procedure.
+- A task with no image artifacts or an empty/missing download is an error, not a successful generation. Include an image-saving output node in image workflows.
+- Regression tests use local filesystem-backed upload semantics, controlled executor contracts and real **local** child processes. They never allocate a Colab environment and do not establish GPU inference success. The first post-fix GPU run still requires an explicitly approved time/CU budget.
+
 ## Verification and operating boundary
 
 Verify separately:

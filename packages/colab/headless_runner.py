@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import importlib
 import inspect
 import json
 import os
@@ -74,9 +75,15 @@ class HeadlessPromptServer:
         self.last_node_id: str | None = None
         self.last_prompt_id: str = prompt_id
         self.loop = None
+        self.sockets_metadata: dict[str, Any] = {}
 
     def send_sync(self, event: str, data: Any, sid: str | None = None) -> None:
         if not isinstance(data, dict):
+            return
+        if event == "progress_state":
+            for node_id, state in (data.get("nodes") or {}).items():
+                if isinstance(state, dict) and state.get("state") == "running":
+                    self.send_sync("progress", {"node": node_id, "value": state.get("value"), "max": state.get("max")})
             return
         if event == "progress":
             _emit(
@@ -117,17 +124,34 @@ class _RealComfyEngine:
             sys.path.insert(0, str(comfy_dir))
         os.chdir(comfy_dir)
 
+        if cfg.get("args"):
+            # Parse only profile flags, never ipykernel's argv. Keep the existing
+            # Namespace object so modules that imported it see the same settings.
+            cli_args = importlib.import_module("comfy.cli_args")
+            args = cli_args.parser.parse_args(list(cfg["args"]), namespace=cli_args.args)
+            # Match pinned cli_args' post-parse implications and normalization.
+            for source, target in (
+                ("high_ram", "cache_classic"), ("windows_standalone_build", "auto_launch"),
+                ("windows_standalone_build", "enable_assets"), ("disable_api_nodes", "offline"),
+                ("offline", "disable_partner_nodes"), ("disable_comfy_compiler", "disable_cuda_graphs"),
+                ("force_fp16", "fp16_unet"), ("enable_manager_legacy_ui", "enable_manager"),
+            ):
+                if getattr(args, source, False):
+                    setattr(args, target, True)
+            if not getattr(args, "enable_assets", False):
+                args.disable_assets = True
+            if getattr(args, "disable_auto_launch", False):
+                args.auto_launch = False
+            fast = getattr(args, "fast", None)
+            args.fast = set(cli_args.PerformanceFeature) if fast == [] else set(fast or ())
+
         emp_file = cfg.get("extra_model_paths_file")
         if emp_file and os.path.isfile(emp_file):
             try:
-                import importlib
-
                 extra_config = importlib.import_module("utils.extra_config")
                 extra_config.load_extra_path_config(emp_file)
             except Exception:
                 pass
-
-        import importlib
 
         execution = importlib.import_module("execution")
         folder_paths = importlib.import_module("folder_paths")
@@ -143,7 +167,20 @@ class _RealComfyEngine:
         self.execution = execution
         self.folder_paths = folder_paths
         self.server = HeadlessPromptServer()
-        self.executor = execution.PromptExecutor(self.server)
+        # bc5f880's executor unconditionally reads both RAM headroom values.
+        # Keep the existing classic cache policy; zero means no RAM headroom.
+        self.executor = execution.PromptExecutor(
+            self.server, cache_args={"lru": 0, "ram": 0, "ram_inactive": 0}
+        )
+        # main.py normally installs this hook; headless mode never imports main.
+        utils = sys.modules.get("comfy.utils")
+        hook_setter = getattr(utils, "set_progress_bar_global_hook", None)
+        if callable(hook_setter):
+            hook_setter(self._progress_hook)
+
+    def _progress_hook(self, value, total, preview_image, prompt_id=None, node_id=None) -> None:
+        # Keep only scalar progress. Do not encode preview images or open sockets.
+        self.server.send_sync("progress", {"value": value, "max": total, "node": node_id or self.server.last_node_id})
 
     def run(self, prompt: dict[str, Any], prompt_id: str) -> dict[str, Any]:
         self.server.last_prompt_id = prompt_id
@@ -168,7 +205,7 @@ class _RealComfyEngine:
         if not valid_ok:
             raise RuntimeError(f"ComfyUI prompt validation failed: {json.dumps({'error': err_info, 'node_errors': node_errors})[:600]}")
 
-        extra_data: dict[str, Any] = {}
+        extra_data: dict[str, Any] = {"client_id": "kit-headless"}
         if hasattr(self.executor, "execute_async") and inspect.iscoroutinefunction(self.executor.execute_async):
             asyncio.run(self.executor.execute_async(prompt, prompt_id, extra_data, good_outputs))
         else:

@@ -54,6 +54,9 @@ class FakeColab:
         if p.is_file():
             self.remote_files[dst] = p.read_bytes()
 
+    async def ensure_dirs(self, name, paths):
+        self.calls.append("ensure_dirs")
+
     async def download(self, name, remote_path, local_path):
         self.calls.append(f"download:{remote_path}")
         data = self.remote_files.get(remote_path, FAKE_PNG)

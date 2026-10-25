@@ -125,7 +125,7 @@ class BatchJob:
             "duration_s": self.duration_s,
             "step": self.step,
             "max_steps": self.max_steps,
-            "error": self.error,
+            "error": redact_secrets(self.error),
             "images": images,
         }
 
@@ -133,7 +133,7 @@ class BatchJob:
         status_str = "success" if self.status == "success" else "error"
         msgs = []
         if self.error:
-            msgs.append(["execution_error", {"exception_message": self.error}])
+            msgs.append(["execution_error", {"exception_message": redact_secrets(self.error)}])
         return {
             "prompt": [self.number, self.prompt_id, self.prompt, {}, []],
             "outputs": self.outputs,
@@ -209,7 +209,7 @@ class BatchDispatcher:
                     started_at=raw.get("started_at"),
                     finished_at=raw.get("finished_at"),
                     duration_s=raw.get("duration_s"),
-                    error=str(raw.get("error") or ("Interrupted by gateway restart" if st == "error" and not raw.get("error") else "")),
+                    error=redact_secrets(str(raw.get("error") or ("Interrupted by gateway restart" if st == "error" and not raw.get("error") else ""))),
                     outputs=raw.get("outputs") if isinstance(raw.get("outputs"), dict) else {},
                 )
                 job.done_event.set()
@@ -234,7 +234,7 @@ class BatchDispatcher:
                     "started_at": j.started_at,
                     "finished_at": j.finished_at,
                     "duration_s": j.duration_s,
-                    "error": j.error,
+                    "error": redact_secrets(j.error),
                     "outputs": j.outputs,
                 }
                 for j in ordered
@@ -422,9 +422,10 @@ class BatchDispatcher:
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
-                log.exception("unexpected worker error on %s", job.prompt_id)
+                clean_error = redact_secrets(str(e))
+                log.error("worker error on %s: %s", job.prompt_id, clean_error)
                 job.status = "error"
-                job.error = str(e)[:400]
+                job.error = clean_error[:400]
                 job.finished_at = time.time()
             finally:
                 job.done_event.set()
@@ -451,6 +452,7 @@ class BatchDispatcher:
         self.session.bus.publish("job", job.to_summary())
 
         session_name = self.settings.colab_session_name
+        await self.session.colab.ensure_dirs(session_name, ["/content/kit/tasks", "/content/ComfyUI/input"])
         await self._upload_referenced_inputs(session_name, job.prompt)
 
         remote_task = f"/content/kit/tasks/{job.prompt_id}.json"
@@ -524,17 +526,20 @@ class BatchDispatcher:
                 local_name = f"{job.prompt_id}_{safe_base}"
                 local_dest = safe_resolve_under(self.outputs_dir, local_name)
                 await self.session.colab.download(session_name, remote_path, str(local_dest))
-                if local_dest.is_file():
-                    downloaded_imgs.append(
-                        {
-                            "filename": local_name,
-                            "subfolder": "",
-                            "type": "output",
-                        }
-                    )
+                if not local_dest.is_file() or local_dest.stat().st_size == 0:
+                    raise ColabError("Image artifact download produced a missing or empty file")
+                downloaded_imgs.append(
+                    {
+                        "filename": local_name,
+                        "subfolder": "",
+                        "type": "output",
+                    }
+                )
             if downloaded_imgs:
                 local_outputs[str(node_id)] = {"images": downloaded_imgs}
 
+        if not local_outputs:
+            raise ColabError("Headless workflow returned no image artifacts; include a SaveImage output node")
         job.outputs = local_outputs
         job.duration_s = result_payload.get("duration_s") or round(time.time() - (job.started_at or job.created_at), 2)
         job.finished_at = time.time()

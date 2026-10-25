@@ -144,6 +144,20 @@ p = os.path.join(d, 'a.bin'); open(p, 'wb').write(b'tampered-payload'); print(p)
         dl.bg_pool.shutdown(wait=True, cancel_futures=True)
 
 
+def test_setup_reused_runtime_recreates_missing_task_directory(tmp_path, monkeypatch):
+    comfy = tmp_path / "ComfyUI"
+    (comfy / "comfy").mkdir(parents=True)
+    runtime = tmp_path / "kit/runtime_config.json"
+    runtime.parent.mkdir()
+    runtime.write_text("{}")
+    monkeypatch.setattr(setup, "COMFY", str(comfy))
+    monkeypatch.setattr(setup, "RUNTIME_CFG", str(runtime))
+    monkeypatch.setattr(setup, "LOG", str(tmp_path / "logs"))
+    monkeypatch.setattr(setup, "PLAN", {"comfyui": {}})
+    setup.main()
+    assert (runtime.parent / "tasks").is_dir()
+
+
 def test_setup_contains_no_cloudflared_or_keepalive():
     source = colab_setup.read_text(encoding="utf-8")
     assert "cloudflared" not in source

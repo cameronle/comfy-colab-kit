@@ -659,6 +659,7 @@ def fetch_only():
 
 def main():
     os.makedirs(LOG, exist_ok=True)
+    os.makedirs(os.path.join(os.path.dirname(RUNTIME_CFG), "tasks"), exist_ok=True)
     os.makedirs(f"{COMFY}/input", exist_ok=True)
     os.makedirs(f"{COMFY}/output", exist_ok=True)
     if PLAN.get("fetch_only"):

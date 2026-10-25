@@ -14,16 +14,20 @@ import os
 import re
 from typing import AsyncIterator, Protocol
 
+from .redaction import redact_secrets
+
 log = logging.getLogger("gate.colab")
 
 
 class ColabError(RuntimeError):
-    pass
+    def __init__(self, message: str):
+        super().__init__(redact_secrets(message))
 
 
 class ColabRunner(Protocol):
     async def sessions(self) -> list[str]: ...
     async def new(self, name: str, accelerator: str) -> None: ...
+    async def ensure_dirs(self, name: str, paths: list[str]) -> None: ...
     async def upload(self, name: str, src: str, dst: str) -> None: ...
     async def download(self, name: str, remote_path: str, local_path: str) -> None: ...
     def exec_stream(self, name: str, code: str, timeout_s: int) -> AsyncIterator[str]: ...
@@ -58,11 +62,18 @@ class ColabCLI:
         try:
             out, _ = await asyncio.wait_for(proc.communicate(stdin.encode() if stdin else None), timeout)
         except asyncio.TimeoutError as e:
-            proc.kill()
             raise ColabError(f"colab {args[0]} timed out") from e
+        finally:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
         text = out.decode(errors="replace")
         if proc.returncode:
-            raise ColabError(f"colab {args[0]} failed ({proc.returncode}): {text[-500:]}")
+            safe_text = redact_secrets(text)
+            raise ColabError(f"colab {args[0]} failed ({proc.returncode}): {safe_text[-500:]}")
         return text
 
     async def sessions(self) -> list[str]:
@@ -80,6 +91,12 @@ class ColabCLI:
 
     async def upload(self, name: str, src: str, dst: str) -> None:
         await self._run("upload", "-s", name, src, dst, timeout=600)
+
+    async def ensure_dirs(self, name: str, paths: list[str]) -> None:
+        # Contents API uploads do not create parent directories. Send paths on
+        # stdin, safely quoted as Python literals, before uploading any task.
+        code = f"import os\nfor _kit_dir in {paths!r}:\n    os.makedirs(_kit_dir, exist_ok=True)\n"
+        await self._run("exec", "-s", name, "--timeout", "20", stdin=code, timeout=30)
 
     async def download(self, name: str, remote_path: str, local_path: str) -> None:
         await self._run("download", "-s", name, remote_path, local_path, timeout=600)
@@ -99,15 +116,32 @@ class ColabCLI:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        assert proc.stdin and proc.stdout
-        proc.stdin.write(code.encode())
-        await proc.stdin.drain()
-        proc.stdin.close()
-        async for raw in proc.stdout:
-            yield raw.decode(errors="replace").rstrip("\n")
-        rc = await proc.wait()
-        if rc:
-            raise ColabError(f"colab exec exited with {rc}")
+        try:
+            assert proc.stdin and proc.stdout
+            proc.stdin.write(code.encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
+            # The CLI's notebook timeout is not a local process deadline.
+            deadline = asyncio.get_running_loop().time() + timeout_s + 15
+            while True:
+                remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+                raw = await asyncio.wait_for(proc.stdout.readline(), remaining)
+                if not raw:
+                    break
+                yield redact_secrets(raw.decode(errors="replace").rstrip("\n"))
+            remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+            rc = await asyncio.wait_for(proc.wait(), remaining)
+            if rc:
+                raise ColabError(f"colab exec exited with {rc}")
+        except asyncio.TimeoutError as e:
+            raise ColabError("colab exec timed out") from e
+        finally:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
 
     async def restart_kernel(self, name: str) -> None:
         await self._run("restart-kernel", "-s", name, timeout=120)

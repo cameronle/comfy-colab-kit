@@ -26,9 +26,14 @@ async def test_real_engine_bridge_works_inside_running_notebook_loop(tmp_path, m
     class Executor:
         success = True
         history_result = {"outputs": {}}
-        def __init__(self, server, **kwargs):
+        def __init__(self, server, cache_args=None, **kwargs):
             self.server = server
+            self.cache_args = cache_args
         async def execute_async(self, prompt, prompt_id, extra_data, outputs):
+            # Pinned ComfyUI bc5f880 reads these unconditionally before sampling.
+            assert self.cache_args["ram"] >= 0
+            assert self.cache_args["ram_inactive"] >= 0
+            assert extra_data["client_id"] == "kit-headless"
             events.append("executed")
 
     monkeypatch.setitem(sys.modules, "execution", SimpleNamespace(validate_prompt=validate_prompt, PromptExecutor=Executor))
