@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .colab import ColabError
+from .colab import ColabConnectionError, ColabError
 from .config import Settings
 from .session import Session, redact_secrets
 from .state import State
@@ -163,6 +163,7 @@ class BatchDispatcher:
         self._worker_task: asyncio.Task | None = None
         self._uploaded_inputs: dict[str, int] = {}  # filename -> mtime_ns for current VM session
         self._last_session_started: float | None = None
+        self.session.stop_callbacks.append(self.cancel)
         self._restore_jobs()
 
     def start(self) -> None:
@@ -170,12 +171,18 @@ class BatchDispatcher:
             self._worker_task = asyncio.create_task(self._worker_loop())
 
     async def close(self) -> None:
+        await self.cancel("Gateway shutting down")
+        self._persist_jobs()
+
+    async def cancel(self, reason: str) -> None:
+        self.clear_pending()
         if self._worker_task and not self._worker_task.done():
-            self._worker_task.cancel()
-            try:
-                await self._worker_task
-            except asyncio.CancelledError:
-                pass
+            if self._worker_task is not asyncio.current_task():
+                self._worker_task.cancel(reason)
+                try:
+                    await self._worker_task
+                except asyncio.CancelledError:
+                    pass
         self._persist_jobs()
 
     def _sync_busy_flag(self) -> None:
@@ -345,6 +352,7 @@ class BatchDispatcher:
             j.finished_at = time.time()
             j.done_event.set()
             self.session.bus.publish("job", j.to_summary())
+            self._queue.task_done()
             cleared += 1
         for j in kept:
             self._queue.put_nowait(j)
@@ -419,7 +427,10 @@ class BatchDispatcher:
             self._sync_busy_flag()
             try:
                 await self._execute_job(job)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as e:
+                job.status = "cancelled"
+                job.error = str(e) or "Execution cancelled"
+                job.finished_at = time.time()
                 raise
             except Exception as e:  # noqa: BLE001
                 clean_error = redact_secrets(str(e))
@@ -427,6 +438,10 @@ class BatchDispatcher:
                 job.status = "error"
                 job.error = clean_error[:400]
                 job.finished_at = time.time()
+                if isinstance(e, ColabConnectionError):
+                    # Completion is unknown: release this VM and cancel pending
+                    # work rather than replaying a potentially executed graph.
+                    await self.session.stop(f"batch transport failure: {clean_error[:200]}")
             finally:
                 job.done_event.set()
                 self._running = None
@@ -495,6 +510,8 @@ class BatchDispatcher:
                     err_payload = json.loads(clean.split(" ", 1)[1])
                 else:
                     self.session.bus.publish("log", f"[{job.prompt_id}] {clean}")
+        except ColabConnectionError:
+            raise
         except ColabError as ce:
             if err_payload is None:
                 err_payload = {"error": str(ce)[:400], "oom": "out of memory" in str(ce).lower()}

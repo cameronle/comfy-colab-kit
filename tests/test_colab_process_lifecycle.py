@@ -74,3 +74,35 @@ async def test_stream_closure_reaps_cli_child(local_cli):
     assert await anext(stream) == "LOCAL_READY"
     await stream.aclose()
     assert children[0].returncode is not None
+
+
+@pytest.mark.parametrize("fatal", [
+    "RuntimeError: Connection was lost.",
+    "colab_cli.runtime.ExecutionError: Execution did not complete",
+])
+async def test_fatal_transport_traceback_reaps_hung_cli_with_original_error(monkeypatch, fatal):
+    original = asyncio.create_subprocess_exec
+    children = []
+
+    async def spawn(*argv, **kwargs):
+        proc = await original(
+            sys.executable, "-u", "-c",
+            f"import time; print({fatal!r}, flush=True); time.sleep(60)",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        children.append(proc)
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    try:
+        with pytest.raises(ColabError, match="Connection was lost|Execution did not complete"):
+            async with asyncio.timeout(1):
+                async for _ in ColabCLI("local-test").exec_stream("owned-session", "pass", 30):
+                    pass
+        assert children[0].returncode is not None
+    finally:
+        for proc in children:
+            if proc.returncode is None:
+                proc.kill()
+            await asyncio.wait_for(proc.wait(), 2)

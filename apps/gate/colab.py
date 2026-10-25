@@ -24,6 +24,10 @@ class ColabError(RuntimeError):
         super().__init__(redact_secrets(message))
 
 
+class ColabConnectionError(ColabError):
+    """Execution completion is unknown; never automatically replay the task."""
+
+
 class ColabRunner(Protocol):
     async def sessions(self) -> list[str]: ...
     async def new(self, name: str, accelerator: str) -> None: ...
@@ -128,7 +132,17 @@ class ColabCLI:
                 raw = await asyncio.wait_for(proc.stdout.readline(), remaining)
                 if not raw:
                     break
-                yield redact_secrets(raw.decode(errors="replace").rstrip("\n"))
+                line = redact_secrets(raw.decode(errors="replace").rstrip("\n"))
+                # CLI 0.7.5 can leave non-daemon Jupyter threads alive when
+                # its preliminary exec fails before entering runtime.stop().
+                # Preserve the cause and reap the owned child immediately.
+                if any(marker in line for marker in (
+                    "RuntimeError: Connection was lost.",
+                    "ExecutionError: Execution did not complete",
+                    "WebSocketConnectionClosedException:",
+                )):
+                    raise ColabConnectionError(f"Colab kernel connection failed: {line}")
+                yield line
             remaining = max(0.0, deadline - asyncio.get_running_loop().time())
             rc = await asyncio.wait_for(proc.wait(), remaining)
             if rc:

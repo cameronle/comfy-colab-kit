@@ -21,7 +21,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from . import stopper
 from .budget import Ledger
@@ -128,10 +128,12 @@ class Session:
         self.open_clients = 0
         self.clients_zero_since: float | None = None
         self.queue_busy = False
+        self.stop_callbacks: list[Callable[[str], Awaitable[None]]] = []
         self.progress: dict[str, Any] = {}
         self.stage_durations: dict[str, dict[str, Any]] = {}
         self.workflows: list[str] | None = None
         self._task: asyncio.Task | None = None
+        self._boot_ready_seen = False
         self._fetch_task: asyncio.Task | None = None
         self.on_demand: list[str] = []
         self.fetching: list[str] = []
@@ -476,6 +478,10 @@ class Session:
     # ── internals ─────────────────────────────────────────────────────────
     async def _stop_locked(self, reason: str) -> None:
         m = self.machine
+        # Stop local work as well as the VM, including when already sleeping.
+        # A callback invoked from the worker itself must not await itself.
+        for callback in self.stop_callbacks:
+            await callback(reason)
         if m.state == State.SLEEPING:
             return
         if self._task and not self._task.done() and self._task is not asyncio.current_task():
@@ -627,6 +633,12 @@ class Session:
                 self.fetch_error = str(d.get("error", "fetch failed"))
             self.bus.publish("state", self.status())
         elif clean.startswith("KIT_READY"):
+            # The marker can precede the CLI's execute reply/socket cleanup.
+            # Do not allow another client onto this kernel until boot exits.
+            if self.boot_task_running() and asyncio.current_task() is self._task:
+                self._boot_ready_seen = True
+                self.persist()
+                return
             if self.machine.state != State.READY and self.machine.can(State.READY):
                 self.clients_zero_since = self.clock() if self.open_clients == 0 else None
                 self.touch()
@@ -638,6 +650,7 @@ class Session:
 
     async def _boot(self, pid: str) -> None:
         name = self.settings.colab_session_name
+        self._boot_ready_seen = False
         try:
             plan = build_plan(self.profiles[pid], self.settings, self.workflows)
             self.on_demand, self.fetching, self.fetch_error = sorted(plan.get("on_demand") or {}), [], ""
@@ -656,6 +669,8 @@ class Session:
                 try:
                     async for line in self.colab.exec_stream(name, self._bootstrap_code(), timeout):
                         self.handle_line(line)
+                    if self._boot_ready_seen and self.machine.can(State.READY):
+                        self.machine.to(State.READY, "ComfyUI batch runtime ready; setup connection closed")
                     break
                 except ColabError:
                     if self.machine.state not in (State.READY, State.FAILED) and attempt < 3 and not self.progress.get("stage"):
