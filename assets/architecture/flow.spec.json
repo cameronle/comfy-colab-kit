@@ -57,8 +57,8 @@
             "zh": "浏览器"
           },
           "sub": {
-            "en": "SSE / WS",
-            "zh": "SSE / WS"
+            "en": "SSE / HTTP",
+            "zh": "SSE / HTTP"
           }
         },
         {
@@ -113,8 +113,8 @@
               "zh": "CU 账本 · 预算闸"
             },
             {
-              "en": "Reverse proxy /prompt · /history · /view · /ws",
-              "zh": "反向代理 /prompt · /history · /view · /ws"
+              "en": "Batch queue /prompt · /history · /view",
+              "zh": "批处理队列 /prompt · /history · /view"
             }
           ]
         },
@@ -138,8 +138,8 @@
               "zh": "工作流 · 节点"
             },
             {
-              "en": "ComfyUI :8188",
-              "zh": "ComfyUI :8188"
+              "en": "Headless runner",
+              "zh": "无头 DAG 执行器"
             },
             {
               "en": "Outputs output/",
@@ -147,8 +147,8 @@
             }
           ],
           "note": {
-            "en": "watchdog · 20 min without heartbeat",
-            "zh": "watchdog · 心跳 20 min 自毁"
+            "en": "no tunnel · warm kernel cache",
+            "zh": "无穿透隧道 · 内核热加载"
           },
           "cost": {
             "en": "Billing 1.71 CU/h",
@@ -253,7 +253,7 @@
           [
             "downloading",
             "booting",
-            "tunnel"
+            "verify"
           ],
           [
             "booting",
@@ -263,7 +263,7 @@
           [
             "smoke_testing",
             "ready",
-            "serve"
+            "batch"
           ]
         ]
       },
@@ -332,7 +332,7 @@
       "kind": "grid",
       "columns": 5,
       "title": {
-        "en": "③ Automatic shutdown",
+        "en": "③ Auto-stop",
         "zh": "③ 自动停机"
       },
       "note": {
@@ -348,7 +348,7 @@
             "en": "Idle timeout",
             "zh": "空闲超时"
           },
-          "code": "IDLE_TIMEOUT_MIN = 30",
+          "code": "IDLE_TIMEOUT_MIN = 10",
           "note": {
             "en": "skipped while the queue is busy",
             "zh": "队列非空时跳过"
@@ -381,8 +381,8 @@
             "zh": "日 12 / 月 150 CU"
           },
           "note": {
-            "en": "wake refused below 5 CU",
-            "zh": "余额低于 5 CU 拒绝开机"
+            "en": "wake refused at ≤ 10 CU",
+            "zh": "余额 ≤ 10 CU 拒绝开机"
           }
         },
         {
@@ -390,13 +390,13 @@
           "h": 74,
           "accent": "sky",
           "title": {
-            "en": "Watchdog",
-            "zh": "看门狗"
+            "en": "Orphan sweep",
+            "zh": "孤儿回收"
           },
-          "code": "WATCHDOG_GATE_LOST_MIN = 20",
+          "code": "ORPHAN_SWEEP_MIN = 5",
           "note": {
-            "en": "VM self-destructs on silence",
-            "zh": "网关失联 VM 自毁"
+            "en": "reconciles server sessions",
+            "zh": "周期回读并清理残留实例"
           }
         },
         {

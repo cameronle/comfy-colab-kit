@@ -136,7 +136,7 @@
     <rect x="0" y="0" width="104" height="52" rx="10" fill="var(--bg-card)" stroke="var(--border-card)" stroke-width="1.4" />
     <rect x="0" y="0" width="4" height="52" rx="2" fill="var(--green)" />
     <text x="16" y="22" font-size="13.5" font-weight="650" fill="var(--ink-primary)">Browser</text>
-    <text x="16" y="40" font-size="11" class="code-text" fill="var(--ink-secondary)">SSE / WS</text>
+    <text x="16" y="40" font-size="11" class="code-text" fill="var(--ink-secondary)">SSE / HTTP</text>
   </g>
   <g transform="translate(245.3,369.3)">
     <rect x="0" y="6" width="182" height="100" rx="12" fill="#000000" opacity="0.07" />
@@ -165,7 +165,7 @@
       <rect x="0" y="96" width="242" height="26" rx="6" fill="var(--bg-raise)" stroke="var(--border-card)" stroke-width="1" />
       <text x="121" y="114" font-size="11" text-anchor="middle" fill="var(--ink-primary)">CU ledger · budget gate</text>
       <rect x="0" y="128" width="242" height="26" rx="6" fill="var(--bg-raise)" stroke="var(--border-card)" stroke-width="1" />
-      <text x="121" y="146" font-size="11" text-anchor="middle" fill="var(--ink-primary)">Reverse proxy /prompt · /history · /view · /ws</text>
+      <text x="121" y="146" font-size="11" text-anchor="middle" fill="var(--ink-primary)">Batch queue /prompt · /history · /view</text>
     </g>
   </g>
   <g transform="translate(896.0,330.3)">
@@ -187,11 +187,11 @@
       <rect x="112" y="30" width="94" height="20" rx="5" fill="var(--blue)" opacity="0.9" />
       <text x="159" y="44" font-size="9.5" text-anchor="middle" fill="var(--ink-on-tape)">Workflows · nodes</text>
       <rect x="10" y="56" width="94" height="20" rx="5" fill="var(--green)" opacity="0.9" />
-      <text x="57" y="70" font-size="9.5" text-anchor="middle" fill="var(--ink-on-tape)">ComfyUI :8188</text>
+      <text x="57" y="70" font-size="9.5" text-anchor="middle" fill="var(--ink-on-tape)">Headless runner</text>
       <rect x="112" y="56" width="94" height="20" rx="5" fill="var(--yellow)" opacity="0.9" />
       <text x="159" y="70" font-size="9.5" text-anchor="middle" fill="var(--ink-on-tape)">Outputs output/</text>
     </g>
-    <text x="14" y="146" font-size="9.5" fill="var(--ink-muted)">watchdog · 20 min without heartbeat</text>
+    <text x="14" y="146" font-size="9.5" fill="var(--ink-muted)">no tunnel · warm kernel cache</text>
     <text x="14" y="162" font-size="9.5" class="code-text" fill="var(--ink-muted)">Billing 1.71 CU/h</text>
   </g>
   <!-- request path edges -->
@@ -258,11 +258,11 @@
     <path id="flow-boot-2" d="M481.81,686.00C481.81,686.00 520.08,686.00 520.08,686.00 L535.99 686.00" stroke="var(--amber)" stroke-width="2.2" fill="none" marker-end="url(#arrow-amber)" />
     <text x="500.9" y="653.7" font-size="9.5" class="code-text" fill="var(--ink-muted)" text-anchor="middle">24.9GB</text>
     <path id="flow-boot-3" d="M646.57,686.00C646.57,686.00 685.03,686.00 685.03,686.00 L700.65 686.00" stroke="var(--amber)" stroke-width="2.2" fill="none" marker-end="url(#arrow-amber)" />
-    <text x="665.8" y="653.7" font-size="9.5" class="code-text" fill="var(--ink-muted)" text-anchor="middle">tunnel</text>
+    <text x="665.8" y="653.7" font-size="9.5" class="code-text" fill="var(--ink-muted)" text-anchor="middle">verify</text>
     <path id="flow-boot-4" d="M797.16,686.00C797.16,686.00 835.64,686.00 835.64,686.00 L851.32 686.00" stroke="var(--amber)" stroke-width="2.2" fill="none" marker-end="url(#arrow-amber)" />
     <text x="816.4" y="653.7" font-size="9.5" class="code-text" fill="var(--ink-muted)" text-anchor="middle">smoke</text>
     <path id="flow-boot-5" d="M969.60,686.00C969.60,686.00 1008.48,686.00 1008.48,686.00 L1023.99 686.00" stroke="var(--amber)" stroke-width="2.2" fill="none" marker-end="url(#arrow-amber)" />
-    <text x="991.9" y="653.7" font-size="9.5" class="code-text" fill="var(--ink-muted)" text-anchor="middle">serve</text>
+    <text x="991.9" y="653.7" font-size="9.5" class="code-text" fill="var(--ink-muted)" text-anchor="middle">batch</text>
     <path d="M270.7 704.0 V718.7 H748.7 V750.0" stroke="var(--ink-muted)" stroke-width="1.5" fill="none" stroke-dasharray="4 4" marker-end="url(#arrow-plum)" />
     <path d="M429.3 704.0 V718.7 H748.7 V750.0" stroke="var(--ink-muted)" stroke-width="1.5" fill="none" stroke-dasharray="4 4" marker-end="url(#arrow-plum)" />
     <path d="M591.0 704.0 V718.7 H748.7 V750.0" stroke="var(--ink-muted)" stroke-width="1.5" fill="none" stroke-dasharray="4 4" marker-end="url(#arrow-plum)" />
@@ -282,15 +282,15 @@
     </g>
   </g>
   <g transform="translate(40,903)">
-    <rect x="0" y="0" width="164" height="24" rx="4" fill="var(--rose)" opacity="0.9" />
-    <text x="13" y="17" font-size="12.5" font-weight="700" fill="var(--ink-on-tape)">③ Automatic shutdown</text>
+    <rect x="0" y="0" width="102" height="24" rx="4" fill="var(--rose)" opacity="0.9" />
+    <text x="13" y="17" font-size="12.5" font-weight="700" fill="var(--ink-on-tape)">③ Auto-stop</text>
     <text x="180" y="17" font-size="12.5" fill="var(--ink-muted)">Five gates · any one of them releases the GPU and its CU</text>
   </g>
   <g transform="translate(40.0,948.0)">
     <rect x="0" y="0" width="212" height="74" rx="11" fill="var(--bg-card)" stroke="var(--border-card)" stroke-width="1.4" />
     <rect x="0" y="0" width="212" height="4" rx="2" fill="var(--amber)" />
     <text x="14" y="26" font-size="13" font-weight="650" fill="var(--ink-primary)">Idle timeout</text>
-    <text x="14" y="45" font-size="11.5" class="code-text" fill="var(--ink-secondary)">IDLE_TIMEOUT_MIN = 30</text>
+    <text x="14" y="45" font-size="11.5" class="code-text" fill="var(--ink-secondary)">IDLE_TIMEOUT_MIN = 10</text>
     <text x="14" y="62" font-size="10.5" fill="var(--ink-muted)">skipped while the queue is busy</text>
   </g>
   <g transform="translate(262.7,948.0)">
@@ -305,14 +305,14 @@
     <rect x="0" y="0" width="212" height="4" rx="2" fill="var(--violet)" />
     <text x="14" y="26" font-size="13" font-weight="650" fill="var(--ink-primary)">CU budget</text>
     <text x="14" y="45" font-size="11.5" class="code-text" fill="var(--ink-secondary)">12 / 150 CU per day / month</text>
-    <text x="14" y="62" font-size="10.5" fill="var(--ink-muted)">wake refused below 5 CU</text>
+    <text x="14" y="62" font-size="10.5" fill="var(--ink-muted)">wake refused at ≤ 10 CU</text>
   </g>
   <g transform="translate(708.0,948.0)">
     <rect x="0" y="0" width="212" height="74" rx="11" fill="var(--bg-card)" stroke="var(--border-card)" stroke-width="1.4" />
     <rect x="0" y="0" width="212" height="4" rx="2" fill="var(--sky)" />
-    <text x="14" y="26" font-size="13" font-weight="650" fill="var(--ink-primary)">Watchdog</text>
-    <text x="14" y="45" font-size="11.5" class="code-text" fill="var(--ink-secondary)">WATCHDOG_GATE_LOST_MIN = 20</text>
-    <text x="14" y="62" font-size="10.5" fill="var(--ink-muted)">VM self-destructs on silence</text>
+    <text x="14" y="26" font-size="13" font-weight="650" fill="var(--ink-primary)">Orphan sweep</text>
+    <text x="14" y="45" font-size="11.5" class="code-text" fill="var(--ink-secondary)">ORPHAN_SWEEP_MIN = 5</text>
+    <text x="14" y="62" font-size="10.5" fill="var(--ink-muted)">reconciles server sessions</text>
   </g>
   <g transform="translate(930.7,948.0)">
     <rect x="0" y="0" width="212" height="74" rx="11" fill="var(--bg-card)" stroke="var(--border-card)" stroke-width="1.4" />
