@@ -4,6 +4,8 @@
 
 <h1 align="center">Comfy Colab Kit</h1>
 
+> **Maintained fork / native batch deployment:** This fork now runs offline/headless jobs, not the upstream live Colab WebUI proxy. Start with [Native batch deployment and Codex setup](docs/NATIVE_BATCH_DEPLOYMENT.md). The upstream showcase, screenshots and live-WebUI/Docker/Caddy material below are historical, not the active deployment guide.
+
 <p align="center">
   <b>An always-available, wake-on-demand ComfyUI on Google Colab — open the URL; if it's asleep, press Wake and watch it boot; then it is your ComfyUI app.</b>
 </p>

@@ -343,6 +343,9 @@ def run_stdio_server():
         except Exception:
             continue
 
+        # JSON-RPC notifications have no id and must never receive a reply.
+        if "id" not in req:
+            continue
         req_id = req.get("id")
         method = req.get("method")
         params = req.get("params", {})

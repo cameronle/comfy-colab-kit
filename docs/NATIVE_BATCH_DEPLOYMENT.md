@@ -1,0 +1,118 @@
+# Native headless batch deployment
+
+This maintained fork runs **offline/headless ComfyUI jobs**, not the upstream live ComfyUI web-app proxy. The old upstream screenshots, showcase site, Docker/Caddy guide and live-WebUI descriptions are historical material; they do not describe this fork's active production architecture.
+
+## Architecture
+
+```text
+Browser / CLI / MCP
+        |
+Cloudflare Access + existing VPS Tunnel
+        |
+127.0.0.1:18088 — Python gateway managed by systemd
+        |
+Google official Colab CLI, always --auth oauth2
+        |
+Colab notebook kernel — offline PromptExecutor, upload inputs/download outputs
+```
+
+No cloudflared/ngrok tunnel, external web listener or keep-alive loop is installed in Colab. Only the ordinary VPS HTTP gateway is exposed through Cloudflare Tunnel. This reduces the remote-WebUI/tunneling risk in Colab's FAQ, but is not a guarantee of platform approval or resource availability.
+
+## Native service layout
+
+- `/opt/comfy-colab-kit/releases/<git-sha>/`: immutable source snapshots, root owned.
+- `/opt/comfy-colab-kit/current`: active source snapshot; profiles and runner scripts are resolved here.
+- `/opt/comfy-colab-kit/venv`: dedicated uv-created Python environment, not the Hermes environment.
+- `/etc/comfy-colab-kit/gate.env`: root-only service settings, `0600`.
+- `/var/lib/comfy-colab-kit`: private database, ledger, session metadata and output files.
+- `comfy-gate.service`: runs as an unprivileged user, starts on boot and restarts on failure.
+
+Set `HOME` to the existing Colab CLI account's home, explicitly set `COLAB_BIN`, and preserve its private `~/.config/colab-cli/` state. Protect the filesystem read-only except for the gateway state, runtime temporary directory and Colab state directory, because OAuth refresh must be able to update the local token. Do not load the full Hermes environment into the service.
+
+Important settings:
+
+```dotenv
+PUBLIC_HOST=comfy.example.com
+LISTEN_ADDR=127.0.0.1:18088
+STATE_DIR=/var/lib/comfy-colab-kit
+AUTH_DISABLED=false
+OWNER_ONLY_CONTROL=true
+WAKE_ON_VISIT=false
+IDLE_TIMEOUT_MIN=10
+MIN_CU_BALANCE=10
+REQUIRE_CU_BALANCE=true
+ENABLE_SMOKE_TEST=false
+```
+
+Configure the correct Access team, browser-application AUD, allowed email and owner email separately. Never commit real tokens, OAuth state or the production environment file.
+
+CU budgets and stop rules are application-side controls, **not a Google billing hard cap**. Do not automatically allocate CPU/GPU for installation verification; obtain explicit task duration/CU approval for a real model run. Do not purchase or auto-top-up CU.
+
+## Access route policy
+
+Protect the hostname's browser pages with One-time PIN and an exact allowed-email rule. The device approval page `/auth/device` and approval/deny POST endpoints must remain human-authenticated.
+
+Bypass Access only for the machine routes actually served by the gateway:
+
+```text
+/_gate/*
+/mcp
+/prompt
+/history
+/history/*
+/view
+/queue
+/upload/image
+/interrupt
+/api/auth/device/code
+/api/auth/device/token
+```
+
+"Bypass" here means bypass the edge login page, **not bypass application authorization**. The origin validates an application Bearer token or a correctly signed Access JWT/cookie on all non-public routes. Device-code/polling endpoints and liveness are intentionally public. Agent tokens must not mint/approve/manage credentials. Match the code's route matrix; do not copy unrelated `/v1/*` rules from an OpenAI-compatible API deployment.
+
+When updating a remote-managed Tunnel, compare the current configuration against the backed-up baseline, add only the new hostname before its final catch-all, and preserve all unrelated settings. Create the proxied DNS CNAME separately and read back both objects. A normal remote configuration push needs no cloudflared restart.
+
+## Local client and Codex
+
+Install a reviewed commit of this fork with `uv tool install 'git+https://github.com/cameronle/comfy-colab-kit.git@<reviewed-sha>'` (replace the placeholder with the verified deployment commit), then pair on the **client computer**:
+
+```bash
+# POSIX shells: keep newly saved local credentials private.
+umask 077
+ckit auth https://comfy.example.com
+ckit status --json
+codex mcp add comfy -- ckit mcp
+```
+
+Open the displayed pairing link, sign in using the allowed email and approve the device yourself. `ckit` saves the endpoint-specific token to `~/.config/ckit/config.json`; never send this file or its token through chat. On Windows, use the same ckit/Codex commands from the local terminal and protect the saved file with the account's private filesystem permissions. The POSIX `umask` command is not a PowerShell command.
+
+The stdio MCP bridge reads the ckit config and calls the real HTTPS gateway; no token needs to be put in the Codex command or config. `codex mcp list` should show the entry. Tools are `gate_status`, `gate_wake`, `gate_txt2img`, `gate_generate`, and `gate_stop`.
+
+Alternatively, use native Streamable HTTP in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.comfy]
+url = "https://comfy.example.com/mcp"
+bearer_token_env_var = "CKIT_TOKEN"
+startup_timeout_sec = 30
+tool_timeout_sec = 3600
+```
+
+Load `CKIT_TOKEN` from your private ckit endpoint configuration into the environment of the Codex process. Do not inline it into TOML, process arguments, repository files or messages. Configure only one entry named `comfy`—choose stdio or HTTP, not both. Long tool timeouts accommodate cold starts but do not authorize spending.
+
+## Verification and operating boundary
+
+Verify separately:
+
+1. systemd is active/enabled; port `18088` listens only on loopback.
+2. local and public liveness return JSON, unauthorized machine calls return JSON `401`.
+3. browser pages redirect to the correct Access login; device approval does not accept agent tokens.
+4. authenticated status/profile/queue calls work; traversal and cross-origin requests fail.
+5. an official MCP SDK can initialize, list all five tools and call `gate_status` through real HTTPS; stdio notifications must not produce responses.
+6. device-code creation and polling work without returning Access HTML; before human approval, polling must stay `authorization_pending`.
+7. Colab usage/sessions still show no allocation after installation checks.
+8. the first human OTP login and real GPU-generated output are separate acceptance steps, not established by the checks above.
+
+An asleep gateway is a healthy idle state. Do not call `gate_wake`/`ckit wake` just to prove deployment readiness. Before an approved model run, confirm hardware, model storage requirements, time/CU budget and cleanup; download/validate the real result, stop only the task-owned environment and read back sessions to confirm release.
+
+For service diagnosis use `systemctl status comfy-gate.service`, `journalctl -u comfy-gate.service`, and `/_gate/healthz`. Never restart Hermes, the shared Tunnel, or unrelated API services to apply a gateway-only update.

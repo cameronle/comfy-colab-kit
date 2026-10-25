@@ -4,6 +4,8 @@
 
 <h1 align="center">Comfy Colab Kit</h1>
 
+> **维护分支 / 原生批处理部署：** 此 fork 已改为离线无头任务，不再反向代理 Colab 内的实时 ComfyUI Web 界面。请先看[原生批处理部署与 Codex 接入](docs/NATIVE_BATCH_DEPLOYMENT.md)。下方继承的官网、截图、实时 WebUI 与 Docker/Caddy 说明均为历史资料，不代表当前生产架构。
+
 <p align="center">
   <b>随时可打开、按需唤醒的 Colab ComfyUI —— 打开网址；睡着就点“唤醒”看它启动；醒来后就是你的 ComfyUI 应用。</b>
 </p>
