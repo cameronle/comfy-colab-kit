@@ -508,26 +508,39 @@ async def interrupt_route(request: web.Request) -> web.Response:
 
 # ── Model Context Protocol (HTTP Streamable JSON-RPC 2.0) ────────────────────
 async def mcp_endpoint(request: web.Request) -> web.Response:
+    origin = request.headers.get("Origin")
+    if origin and origin != f"https://{request.app[SETTINGS].public_host}":
+        return err(403, "invalid_origin", "Cross-origin MCP requests are not allowed")
     if request.method == "GET":
+        if "text/event-stream" in request.headers.get("Accept", ""):
+            raise web.HTTPMethodNotAllowed("GET", ["POST"])
         return web.json_response({
             "name": "comfy-colab-kit",
             "version": __version__,
             "mode": "batch",
-            "protocol": "2024-11-05",
+            "protocol": "2025-03-26",
             "tools": ["gate_status", "gate_wake", "gate_txt2img", "gate_generate", "gate_stop"],
         })
+    if request.method != "POST":
+        raise web.HTTPMethodNotAllowed(request.method, ["POST"])
     body = await _body(request)
     req_id = body.get("id")
     method = body.get("method")
     params = body.get("params", {})
+    if not isinstance(params, dict):
+        return err(400, "invalid_params", "MCP params must be an object")
     s = request.app[SESSION]
+    if "id" not in body and isinstance(method, str) and method.startswith("notifications/"):
+        return web.Response(status=202)
 
     if method == "initialize":
+        requested_version = params.get("protocolVersion")
+        protocol_version = requested_version if requested_version in ("2025-03-26", "2025-06-18") else "2025-03-26"
         return web.json_response({
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": protocol_version,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "comfy-colab-kit", "version": __version__},
             },

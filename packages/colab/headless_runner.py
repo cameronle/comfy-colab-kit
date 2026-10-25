@@ -251,6 +251,17 @@ def execute_prompt(
     engine_factory: Callable[[dict[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     """Execute one ComfyUI API prompt graph headlessly and return structured output info."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        # ipykernel already owns this thread's event loop. Run the whole engine
+        # call on one joined worker so ComfyUI's asyncio.run calls remain valid.
+        # The kernel-global engine cache still persists between consecutive jobs.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="kit-batch") as pool:
+            return pool.submit(execute_prompt, prompt, prompt_id, runtime_cfg_path, engine_factory).result()
     if not isinstance(prompt, dict) or not prompt:
         raise ValueError("prompt must be a non-empty ComfyUI API graph dictionary")
     cfg: dict[str, Any] = {}
