@@ -1,21 +1,24 @@
-"""comfy-gate HTTP server (aiohttp)."""
+"""comfy-gate HTTP server (aiohttp) — Compliant Headless Batch Edition."""
 from __future__ import annotations
 
 import asyncio
 import hmac
+import html as html_lib
 import json
 import logging
 import re
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from aiohttp import web
 
 from . import __version__
-from .auth import AuthError, IDENT, Identity, JWKSCache, authorize, identify
+from .auth import IDENT, AuthError, Identity, JWKSCache, authorize, identify
+from .batch_dispatcher import BatchDispatcher, BatchError
 from .colab import ColabCLI, ColabError, ColabRunner
 from .config import Settings, read_secret_file
-from .db import GateDB, DB_KEY
+from .db import DB_KEY, GateDB
 from .device_auth import (
     create_agent_token_endpoint,
     device_approve_endpoint,
@@ -27,11 +30,12 @@ from .device_auth import (
     revoke_agent_token_endpoint,
 )
 from .profiles import Profile, load_all
-from .proxy import Proxy
 from .session import REPO_ROOT, Session
 from .state import State
 
 log = logging.getLogger("gate")
+
+
 def _find_web_dir() -> Path:
     app_web = Path("/app/apps/gate/web")
     if app_web.is_dir() and (app_web / "index.html").is_file():
@@ -53,7 +57,7 @@ BOT_UA_RE = re.compile(
 )
 SESSION = web.AppKey("session", Session)
 SETTINGS = web.AppKey("settings", Settings)
-PROXY = web.AppKey("proxy", Proxy)
+BATCH = web.AppKey("batch", BatchDispatcher)
 PROFILES = web.AppKey("profiles", dict)
 PROFILE_ERRORS = web.AppKey("profile_errors", dict)
 JWKS = web.AppKey("jwks", object)
@@ -62,8 +66,50 @@ BG = web.AppKey("bg", object)
 
 
 def _fetch_json(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=10) as r:  # noqa: S310 (fixed https URL)
+    with urllib.request.urlopen(url, timeout=10) as r:  # noqa: S310
         return json.loads(r.read())
+
+
+def _load_moss_builder():
+    try:
+        from ckit.moss_template import PRESETS, make_moss_txt2img_graph
+    except ImportError:
+        import sys
+
+        pkg_dir = REPO_ROOT / "packages"
+        if str(pkg_dir) not in sys.path:
+            sys.path.insert(0, str(pkg_dir))
+        from cli.moss_template import PRESETS, make_moss_txt2img_graph
+    return make_moss_txt2img_graph, PRESETS
+
+
+def _inject_reference_image(graph: dict, ref_image: str, denoise: float = 0.65) -> dict:
+    """Optionally adapt a txt2img API graph or LoadImage node to use an uploaded reference image."""
+    if not ref_image:
+        return graph
+    # 1. If the graph already contains a LoadImage node, bind it directly.
+    for node in graph.values():
+        if isinstance(node, dict) and node.get("class_type") == "LoadImage":
+            node.setdefault("inputs", {})["image"] = ref_image
+            for s_node in graph.values():
+                if isinstance(s_node, dict) and "denoise" in (s_node.get("inputs") or {}):
+                    s_node["inputs"]["denoise"] = max(0.05, min(1.0, float(denoise)))
+            return graph
+    # 2. If using the MOSS template (node "23" EmptyFlux2LatentImage + node "5" VAELoader), replace latent source with LoadImage -> VAEEncode.
+    if "23" in graph and "5" in graph:
+        graph["90"] = {"class_type": "LoadImage", "inputs": {"image": ref_image}}
+        graph["91"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["90", 0], "vae": ["5", 0]}}
+        for nid, node in list(graph.items()):
+            if nid in ("90", "91") or not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs") or {}
+            for k, v in list(inputs.items()):
+                if v == ["23", 0]:
+                    inputs[k] = ["91", 0]
+            if "denoise" in inputs:
+                inputs["denoise"] = max(0.05, min(1.0, float(denoise)))
+        graph.pop("23", None)
+    return graph
 
 
 def err(status: int, code: str, msg: str) -> web.Response:
@@ -89,7 +135,11 @@ async def anti_crawler_mw(request: web.Request, handler):
 
 @web.middleware
 async def auth_mw(request: web.Request, handler):
-    if request.path in PUBLIC_PATHS or request.path.startswith("/_gate/static/") or (request.method == "GET" and request.path in ("/mcp", "/_gate/mcp")):
+    if (
+        request.path in PUBLIC_PATHS
+        or request.path.startswith("/_gate/static/")
+        or (request.method == "GET" and request.path in ("/mcp", "/_gate/mcp"))
+    ):
         return await handler(request)
     app = request.app
     query_token = request.query.get("token", "")
@@ -97,10 +147,21 @@ async def auth_mw(request: web.Request, handler):
     cf_cookie = request.cookies.get("CF_Authorization", "")
     try:
         ident = await asyncio.get_running_loop().run_in_executor(
-            None, identify, request.headers, app[SETTINGS], app[JWKS], app[AGENT_TOKEN], query_token, cookie_token, app.get(DB_KEY), cf_cookie)
+            None,
+            identify,
+            request.headers,
+            app[SETTINGS],
+            app[JWKS],
+            app[AGENT_TOKEN],
+            query_token,
+            cookie_token,
+            app.get(DB_KEY),
+            cf_cookie,
+        )
     except AuthError as e:
         accept = request.headers.get("Accept", "")
         if "text/html" in accept and not request.path.startswith("/_gate/") and not request.path.startswith("/api/"):
+            safe_msg = html_lib.escape(e.msg, quote=True)
             html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -109,41 +170,43 @@ async def auth_mw(request: web.Request, handler):
 <title>访问受限 · Comfy Colab Kit</title>
 <style>
 :root {{
-  --bg: #090a0f; --card: #12141c; --border: rgba(255, 255, 255, 0.08);
-  --text: #f3f4f6; --muted: #9ca3af; --primary: #3b82f6; --danger: #f87171;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0;
+  --text: #0f172a; --muted: #64748b; --primary: #2563eb; --danger: #dc2626;
+}}
+@media (prefers-color-scheme: dark) {{
+  :root {{
+    --bg: #0b0f19; --card: #111827; --border: #1f2937;
+    --text: #f3f4f6; --muted: #9ca3af; --primary: #3b82f6; --danger: #f87171;
+  }}
 }}
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{
-  background: var(--bg); color: var(--text); font-family: var(--font);
-  min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 1.5rem;
 }}
 .card {{
-  background: var(--card); border: 1px solid var(--border); border-radius: 16px;
-  width: 100%; max-width: 440px; padding: 2rem; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
-  text-align: center;
+  background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+  width: 100%; max-width: 420px; padding: 1.75rem; text-align: center;
 }}
-h1 {{ font-size: 1.35rem; font-weight: 700; margin-bottom: 0.75rem; }}
-p {{ font-size: 0.9rem; color: var(--muted); line-height: 1.5; margin-bottom: 1.25rem; }}
+h1 {{ font-size: 1.25rem; font-weight: 700; margin-bottom: 0.65rem; }}
+p {{ font-size: 0.88rem; color: var(--muted); line-height: 1.5; margin-bottom: 1.1rem; }}
 .code-box {{
-  background: rgba(0, 0, 0, 0.4); border: 1px solid var(--border); border-radius: 8px;
-  padding: 0.75rem 1rem; font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem;
-  color: var(--danger); margin-bottom: 1.5rem; word-break: break-all;
+  border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem 0.9rem;
+  font-family: ui-monospace, Menlo, monospace; font-size: 0.82rem; color: var(--danger);
+  margin-bottom: 1.25rem; word-break: break-all;
 }}
 .btn {{
-  display: inline-block; padding: 0.7rem 1.4rem; border-radius: 8px;
-  background: var(--primary); color: #fff; text-decoration: none; font-size: 0.9rem; font-weight: 600;
-  transition: opacity 0.15s;
+  display: inline-block; padding: 0.65rem 1.3rem; border-radius: 8px;
+  background: var(--primary); color: #fff; text-decoration: none; font-size: 0.88rem; font-weight: 600;
 }}
-.btn:hover {{ opacity: 0.9; }}
 </style>
 </head>
 <body>
 <div class="card">
   <h1>访问受限 (Access Denied)</h1>
-  <p>您的 Cloudflare 身份认证已通过，但当前账号未在网关允许访问列表中。</p>
-  <div class="code-box">{e.msg}</div>
-  <p style="font-size:0.82rem;margin-bottom:1.5rem">如需访问，请联系管理员将该邮箱加入允许列表，或点击下方重新登录已授权账号。</p>
+  <p>当前请求未通过访问控制校验。</p>
+  <div class="code-box">{safe_msg}</div>
   <a class="btn" href="/cdn-cgi/access/logout">重新登录</a>
 </div>
 </body>
@@ -151,7 +214,6 @@ p {{ font-size: 0.9rem; color: var(--muted); line-height: 1.5; margin-bottom: 1.
             return web.Response(text=html, content_type="text/html", status=e.status)
         return err(e.status, e.code, e.msg)
     request[IDENT] = ident
-    request["identity"] = ident
     resp = await handler(request)
     if query_token and app[AGENT_TOKEN] and hmac.compare_digest(query_token, app[AGENT_TOKEN]):
         resp.set_cookie("agent_token", query_token, path="/", httponly=True, samesite="Lax")
@@ -200,16 +262,25 @@ async def status(request: web.Request) -> web.Response:
         **st,
         "can_stop": can_stop,
         "can_wake": can_wake,
-        "you": {"email": ident.email, "owner": ident.is_owner, "ip": client_ip, "can_stop": can_stop, "can_wake": can_wake},
+        "you": {
+            "email": ident.email,
+            "kind": ident.kind,
+            "owner": ident.is_owner,
+            "ip": client_ip,
+            "can_stop": can_stop,
+            "can_wake": can_wake,
+        },
         "owner_only": list(request.app[SETTINGS].owner_only_actions),
         "version": __version__,
     })
 
 
 async def profiles_route(request: web.Request) -> web.Response:
+    _, presets = _load_moss_builder()
     return web.json_response({
         "default": request.app[SETTINGS].default_profile,
         "profiles": [p.summary() for p in request.app[PROFILES].values()],
+        "presets": list(presets),
         "errors": request.app[PROFILE_ERRORS],
     })
 
@@ -224,20 +295,19 @@ async def wake(request: web.Request) -> web.Response:
     s = request.app[SESSION]
     profile = body.get("profile")
     client_ip = get_client_ip(request)
-    # if a session is already starting/running, the caller joins it (its profile wins);
-    # changing profile is the separate, owner-only /_gate/switch action
     try:
         res = await s.wake(profile, by=ident.email, ip=client_ip, workflows=body.get("workflows"))
     except KeyError:
         return err(404, "unknown_profile", f"unknown profile {profile!r}")
     if res.refused:
         return err(409, res.refused, f"wake refused: {res.refused}")
-    return web.json_response({"joined": res.joined, "state": res.state, "profile": res.profile},
-                             status=200 if res.joined else 202)
+    return web.json_response(
+        {"joined": res.joined, "state": res.state, "profile": res.profile},
+        status=200 if res.joined else 202,
+    )
 
 
 async def fetch(request: web.Request) -> web.Response:
-    """POST /_gate/fetch {"workflows": [...]}: download those workflows' models onto the running VM."""
     ident = _ident(request)
     try:
         authorize(ident, "wake", request.app[SETTINGS])
@@ -246,7 +316,7 @@ async def fetch(request: web.Request) -> web.Response:
     body = await _body(request)
     wids = body.get("workflows")
     if not isinstance(wids, list) or not all(isinstance(w, str) for w in wids) or not wids:
-        return err(400, "bad_request", "body must be {\"workflows\": [\"<id>\", ...]}")
+        return err(400, "bad_request", 'body must be {"workflows": ["<id>", ...]}')
     why = await request.app[SESSION].fetch(wids)
     if why:
         return err(404 if why == "unknown_workflow" else 409, why, f"fetch refused: {why}")
@@ -291,14 +361,160 @@ async def extend(request: web.Request) -> web.Response:
     return web.json_response(request.app[SESSION].status())
 
 
+# ── Batch Execution & ComfyUI-Compatible Endpoints ───────────────────────────
+async def upload_image_route(request: web.Request) -> web.Response:
+    batch = request.app[BATCH]
+    try:
+        reader = await request.multipart()
+    except Exception:
+        return err(400, "invalid_multipart", "Expected multipart/form-data with field 'image'")
+    filename = "upload.png"
+    img_bytes = b""
+    overwrite = True
+    while True:
+        part = await reader.next()
+        if part is None:
+            break
+        if part.name == "image":
+            filename = part.filename or filename
+            img_bytes = await part.read(decode=False)
+        elif part.name == "overwrite":
+            val = (await part.text()).strip().lower()
+            overwrite = val not in ("false", "0", "no")
+    try:
+        info = batch.save_input_image(filename, img_bytes, overwrite=overwrite)
+    except BatchError as be:
+        return err(be.status, be.code, be.msg)
+    return web.json_response(info)
+
+
+async def prompt_route(request: web.Request) -> web.Response:
+    ident = _ident(request)
+    body = await _body(request)
+    prompt_graph = body.get("prompt") if isinstance(body.get("prompt"), dict) else body
+    auto_wake = bool(body.get("auto_wake", False))
+    s = request.app[SESSION]
+    if auto_wake and s.machine.state in (State.SLEEPING, State.FAILED):
+        try:
+            authorize(ident, "wake", request.app[SETTINGS])
+        except AuthError as e:
+            return err(e.status, e.code, e.msg)
+        res = await s.wake(body.get("profile"), by=ident.email, ip=get_client_ip(request))
+        if res.refused:
+            return err(409, res.refused, f"wake refused: {res.refused}")
+    try:
+        job = request.app[BATCH].enqueue(
+            prompt=prompt_graph,
+            submitted_by=ident.email,
+            title=str(body.get("title") or "API Workflow"),
+            timeout_s=int(body.get("timeout_seconds") or 300),
+            allow_booting=auto_wake or s.machine.is_booting,
+        )
+    except BatchError as be:
+        return err(be.status, be.code, be.msg)
+    return web.json_response({"prompt_id": job.prompt_id, "number": job.number, "node_errors": {}})
+
+
+async def txt2img_route(request: web.Request) -> web.Response:
+    ident = _ident(request)
+    body = await _body(request)
+    prompt_text = str(body.get("prompt") or "").strip()
+    if not prompt_text:
+        return err(400, "missing_prompt", "Field 'prompt' is required")
+    auto_wake = bool(body.get("auto_wake", False))
+    s = request.app[SESSION]
+    if auto_wake and s.machine.state in (State.SLEEPING, State.FAILED):
+        try:
+            authorize(ident, "wake", request.app[SETTINGS])
+        except AuthError as e:
+            return err(e.status, e.code, e.msg)
+        try:
+            res = await s.wake(body.get("profile"), by=ident.email, ip=get_client_ip(request))
+        except KeyError:
+            return err(404, "unknown_profile", "Unknown profile")
+        if res.refused:
+            return err(409, res.refused, f"wake refused: {res.refused}")
+
+    make_graph, _ = _load_moss_builder()
+    preset = str(body.get("preset") or "Fast alt · fix + darask0 0.35 · 10 steps")
+    graph = make_graph(
+        prompt=prompt_text,
+        negative_prompt=str(body.get("negative_prompt") or "worst quality, bad anatomy, watermark, jpeg artifact"),
+        preset=preset,
+        seed=int(body.get("seed")) if body.get("seed") is not None else -1,
+        width=int(body.get("width") or 1024),
+        height=int(body.get("height") or 1024),
+    )
+    ref_image = str(body.get("reference_image") or "").strip()
+    if ref_image:
+        graph = _inject_reference_image(graph, ref_image, denoise=float(body.get("denoise") or 0.65))
+
+    try:
+        job = request.app[BATCH].enqueue(
+            prompt=graph,
+            submitted_by=ident.email,
+            title=prompt_text[:80],
+            preset=preset,
+            timeout_s=int(body.get("timeout_seconds") or 300),
+            allow_booting=auto_wake or s.machine.is_booting,
+        )
+    except BatchError as be:
+        return err(be.status, be.code, be.msg)
+    return web.json_response({"prompt_id": job.prompt_id, "number": job.number, "job": job.to_summary()}, status=202)
+
+
+async def jobs_route(request: web.Request) -> web.Response:
+    limit = int(request.query.get("limit", "40") or "40")
+    return web.json_response({"jobs": request.app[BATCH].list_jobs(limit=limit)})
+
+
+async def history_route(request: web.Request) -> web.Response:
+    pid = request.match_info.get("prompt_id")
+    return web.json_response(request.app[BATCH].history_dict(pid))
+
+
+async def view_route(request: web.Request) -> web.StreamResponse:
+    filename = request.query.get("filename", "")
+    file_type = request.query.get("type", "output")
+    subfolder = request.query.get("subfolder", "")
+    try:
+        target = request.app[BATCH].resolve_view_file(filename, file_type=file_type, subfolder=subfolder)
+    except BatchError as be:
+        return err(be.status, be.code, be.msg)
+    return web.FileResponse(target, headers={"Cache-Control": "private, max-age=3600"})
+
+
+async def queue_route(request: web.Request) -> web.Response:
+    batch = request.app[BATCH]
+    if request.method == "POST":
+        ident = _ident(request)
+        s = request.app[SESSION]
+        if not ident.is_owner and not s.can_stop(email=ident.email, ip=get_client_ip(request), is_owner=ident.is_owner):
+            return err(403, "forbidden", "Only the session initiator or owner can clear the queue")
+        body = await _body(request)
+        cleared = batch.clear_pending() if body.get("clear") else 0
+        return web.json_response({"ok": True, "cleared": cleared})
+    return web.json_response(batch.queue_dict())
+
+
+async def interrupt_route(request: web.Request) -> web.Response:
+    ident = _ident(request)
+    s = request.app[SESSION]
+    if not ident.is_owner and not s.can_stop(email=ident.email, ip=get_client_ip(request), is_owner=ident.is_owner):
+        return err(403, "forbidden", "Only the session initiator or owner can interrupt jobs")
+    cleared = request.app[BATCH].clear_pending()
+    return web.json_response({"ok": True, "cleared": cleared})
+
+
+# ── Model Context Protocol (HTTP Streamable JSON-RPC 2.0) ────────────────────
 async def mcp_endpoint(request: web.Request) -> web.Response:
-    """Model Context Protocol (MCP) Streamable/HTTP JSON-RPC 2.0 endpoint."""
     if request.method == "GET":
         return web.json_response({
             "name": "comfy-colab-kit",
-            "version": "0.1.0",
+            "version": __version__,
+            "mode": "batch",
             "protocol": "2024-11-05",
-            "tools": ["gate_status", "gate_wake", "gate_txt2img", "gate_generate", "gate_stop"]
+            "tools": ["gate_status", "gate_wake", "gate_txt2img", "gate_generate", "gate_stop"],
         })
     body = await _body(request)
     req_id = body.get("id")
@@ -313,10 +529,10 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "comfy-colab-kit", "version": "0.1.0"}
-            }
+                "serverInfo": {"name": "comfy-colab-kit", "version": __version__},
+            },
         })
-    elif method == "tools/list":
+    if method == "tools/list":
         return web.json_response({
             "jsonrpc": "2.0",
             "id": req_id,
@@ -324,22 +540,22 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
                 "tools": [
                     {
                         "name": "gate_status",
-                        "description": "Inspect the Comfy Colab session state, active profile, and CU balance.",
-                        "inputSchema": {"type": "object", "properties": {}}
+                        "description": "Inspect the Comfy Colab batch session state, active profile, keep-warm timer, and CU balance.",
+                        "inputSchema": {"type": "object", "properties": {}},
                     },
                     {
                         "name": "gate_wake",
-                        "description": "Wake or join the shared Google Colab L4 GPU instance with a model profile.",
+                        "description": "Wake or join the shared Google Colab L4 GPU batch runtime with a model profile.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
-                                "profile": {"type": "string", "description": "Profile ID, e.g. 'moss-image'"}
-                            }
-                        }
+                                "profile": {"type": "string", "description": "Profile ID, e.g. 'moss-image'"},
+                            },
+                        },
                     },
                     {
                         "name": "gate_txt2img",
-                        "description": "Generate an image using the pre-configured MOSS-Image DeBand pipeline with anti-banding LoRAs and fast sampling.",
+                        "description": "Generate an image headlessly using the MOSS-Image DeBand batch pipeline.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -348,197 +564,215 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
                                 "preset": {"type": "string", "description": "Preset: 'Fast alt' (default), 'Fast', 'Balanced', 'Quality'."},
                                 "seed": {"type": "integer", "description": "Random seed (optional)."},
                                 "width": {"type": "integer", "description": "Image width (default 1024)."},
-                                "height": {"type": "integer", "description": "Image height (default 1024)."}
+                                "height": {"type": "integer", "description": "Image height (default 1024)."},
+                                "timeout_seconds": {"type": "integer", "description": "Max wait seconds (default 180)."},
                             },
-                            "required": ["prompt"]
-                        }
+                            "required": ["prompt"],
+                        },
                     },
                     {
                         "name": "gate_generate",
-                        "description": "Submit a raw ComfyUI prompt graph and return completed image outputs.",
+                        "description": "Submit a raw ComfyUI API prompt graph to the headless batch runner and return output URLs.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
-                                "prompt": {"type": "object", "description": "The ComfyUI API prompt dictionary."}
+                                "prompt": {"type": "object", "description": "The ComfyUI API prompt dictionary."},
+                                "timeout_seconds": {"type": "integer", "description": "Max wait seconds (default 180)."},
                             },
-                            "required": ["prompt"]
-                        }
+                            "required": ["prompt"],
+                        },
                     },
                     {
                         "name": "gate_stop",
-                        "description": "Stop the Colab GPU session immediately to release Compute Units.",
-                        "inputSchema": {"type": "object", "properties": {}}
-                    }
+                        "description": "Stop the Colab GPU session immediately and verify server-side release.",
+                        "inputSchema": {"type": "object", "properties": {}},
+                    },
                 ]
-            }
+            },
         })
-    elif method == "tools/call":
+    if method == "tools/call":
         tool_name = params.get("name")
         ident = _ident(request)
         if tool_name == "gate_status":
+            st = s.status()
+            if not ident.is_owner:
+                st["cu"] = None
+                st["woken_by"] = None
             return web.json_response({
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {"content": [{"type": "text", "text": json.dumps(s.status(), indent=2)}]}
+                "result": {"content": [{"type": "text", "text": json.dumps(st, indent=2)}]},
             })
-        elif tool_name == "gate_wake":
+        if tool_name == "gate_wake":
+            # Enforce exact same owner-only wake authorization as REST /_gate/wake
+            try:
+                authorize(ident, "wake", request.app[SETTINGS])
+            except AuthError as e:
+                return web.json_response(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {"isError": True, "content": [{"type": "text", "text": f"Permission denied ({e.code}): {e.msg}"}]},
+                    },
+                    status=e.status,
+                )
             args = params.get("arguments", {})
             prof = args.get("profile") or request.app[SETTINGS].default_profile
-            res = await s.wake(prof, by=ident.email, ip=get_client_ip(request))
+            try:
+                res = await s.wake(prof, by=ident.email, ip=get_client_ip(request))
+            except KeyError:
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"isError": True, "content": [{"type": "text", "text": f"Unknown profile '{prof}'"}]},
+                })
             if res.refused:
                 return web.json_response({
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "result": {"isError": True, "content": [{"type": "text", "text": f"Wake refused: {res.refused}"}]}
+                    "result": {"isError": True, "content": [{"type": "text", "text": f"Wake refused: {res.refused}"}]},
                 })
             return web.json_response({
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {"content": [{"type": "text", "text": f"Wake initiated for profile '{prof}'. State: {res.state}"}]}
+                "result": {"content": [{"type": "text", "text": f"Wake initiated for profile '{prof}'. State: {res.state}"}]},
             })
-        elif tool_name == "gate_txt2img" or tool_name == "gate_generate":
-            if s.state.value != "ready":
+        if tool_name in ("gate_txt2img", "gate_generate"):
+            if s.machine.state != State.READY:
                 return web.json_response({
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "result": {"isError": True, "content": [{"type": "text", "text": f"Cannot generate: GPU is not ready (state: '{s.state.value}'). Call gate_wake first."}]}
+                    "result": {
+                        "isError": True,
+                        "content": [{"type": "text", "text": f"Cannot generate: GPU is not ready (state: '{s.machine.state.value}'). Call gate_wake first."}],
+                    },
                 })
             args = params.get("arguments", {})
+            title = "MCP Workflow"
+            preset = ""
             if tool_name == "gate_txt2img":
                 prompt_text = (args.get("prompt") or "").strip()
                 if not prompt_text:
                     return web.json_response({
                         "jsonrpc": "2.0",
                         "id": req_id,
-                        "result": {"isError": True, "content": [{"type": "text", "text": "Missing required argument 'prompt'"}]}
+                        "result": {"isError": True, "content": [{"type": "text", "text": "Missing required argument 'prompt'"}]},
                     })
-                from ckit.moss_template import make_moss_txt2img_graph
-                prompt_graph = make_moss_txt2img_graph(
+                make_graph, _ = _load_moss_builder()
+                preset = args.get("preset", "Fast alt · fix + darask0 0.35 · 10 steps")
+                prompt_graph = make_graph(
                     prompt=prompt_text,
                     negative_prompt=args.get("negative_prompt", "worst quality, bad anatomy, watermark, jpeg artifact"),
-                    preset=args.get("preset", "Fast alt · fix + darask0 0.35 · 10 steps"),
+                    preset=preset,
                     seed=args.get("seed", -1),
                     width=args.get("width", 1024),
                     height=args.get("height", 1024),
                 )
+                title = prompt_text[:80]
             else:
                 prompt_graph = args.get("prompt")
                 if not isinstance(prompt_graph, dict):
                     return web.json_response({
                         "jsonrpc": "2.0",
                         "id": req_id,
-                        "result": {"isError": True, "content": [{"type": "text", "text": "Argument 'prompt' must be a ComfyUI graph dictionary"}]}
+                        "result": {"isError": True, "content": [{"type": "text", "text": "Argument 'prompt' must be a ComfyUI graph dictionary"}]},
                     })
 
-            proxy = request.app[PROXY]
             timeout_s = int(args.get("timeout_seconds") or 180)
-            client = await proxy.client()
-            headers = proxy.service_headers(proxy.token_file)
-            headers["Content-Type"] = "application/json"
+            try:
+                job = request.app[BATCH].enqueue(
+                    prompt=prompt_graph,
+                    submitted_by=ident.email,
+                    title=title,
+                    preset=preset,
+                    timeout_s=timeout_s,
+                )
+            except BatchError as be:
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"isError": True, "content": [{"type": "text", "text": f"Prompt rejected ({be.code}): {be.msg}"}]},
+                })
 
             try:
-                async with client.post(f"{proxy.backend}/prompt", json={"prompt": prompt_graph}, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as pr:
-                    if pr.status >= 400:
-                        err_text = await pr.text()
-                        return web.json_response({
-                            "jsonrpc": "2.0",
-                            "id": req_id,
-                            "result": {"isError": True, "content": [{"type": "text", "text": f"Prompt submission failed ({pr.status}): {err_text}"}]}
-                        })
-                    p_out = await pr.json()
-            except Exception as e:
+                await asyncio.wait_for(job.done_event.wait(), timeout=timeout_s)
+            except asyncio.TimeoutError:
                 return web.json_response({
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "result": {"isError": True, "content": [{"type": "text", "text": f"Error contacting backend ComfyUI: {e}"}]}
+                    "result": {"isError": True, "content": [{"type": "text", "text": f"Generation timed out after {timeout_s}s. Prompt ID: {job.prompt_id}"}]},
                 })
 
-            prompt_id = p_out.get("prompt_id")
-            if not prompt_id:
+            if job.status != "success":
                 return web.json_response({
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "result": {"isError": True, "content": [{"type": "text", "text": f"No prompt_id returned from ComfyUI: {json.dumps(p_out)}"}]}
+                    "result": {"isError": True, "content": [{"type": "text", "text": f"Generation failed: {job.error}"}]},
                 })
 
-            start_t = time.time()
-            public_base = f"{request.scheme}://{request.host}".rstrip("/")
-            while time.time() - start_t < timeout_s:
-                await asyncio.sleep(2.5)
-                try:
-                    async with client.get(f"{proxy.backend}/history/{prompt_id}", headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as hr:
-                        if hr.status == 200:
-                            h_out = await hr.json()
-                            if prompt_id in h_out:
-                                item = h_out[prompt_id]
-                                outputs = item.get("outputs", {})
-                                images = []
-                                for node_id, node_out in outputs.items():
-                                    for img in node_out.get("images", []):
-                                        fn = img.get("filename", "")
-                                        sub = img.get("subfolder", "")
-                                        t = img.get("type", "output")
-                                        url = f"{public_base}/view?filename={urllib.parse.quote(fn)}&subfolder={urllib.parse.quote(sub)}&type={urllib.parse.quote(t)}"
-                                        images.append({"filename": fn, "url": url, "node_id": node_id})
-                                res_data = {"prompt_id": prompt_id, "status": item.get("status", {}), "images": images}
-                                res_text = json.dumps(res_data, indent=2, ensure_ascii=False)
-                                if images:
-                                    img_md = "\n".join([f"![{img['filename']}]({img['url']})\nLink: {img['url']}" for img in images])
-                                    res_text += f"\n\n### Generated Images\n{img_md}"
-                                return web.json_response({
-                                    "jsonrpc": "2.0",
-                                    "id": req_id,
-                                    "result": {"content": [{"type": "text", "text": res_text}]}
-                                })
-                except Exception:
-                    continue
-
+            proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+            host = request.headers.get("X-Forwarded-Host", request.host)
+            public_base = f"{proto}://{host}".rstrip("/")
+            images = []
+            for node_id, node_out in job.outputs.items():
+                for img in node_out.get("images", []):
+                    fn = img.get("filename", "")
+                    url = f"{public_base}/view?filename={urllib.parse.quote(fn)}&type=output"
+                    images.append({"filename": fn, "url": url, "node_id": node_id})
+            res_data = {"prompt_id": job.prompt_id, "status": "success", "duration_s": job.duration_s, "images": images}
+            res_text = json.dumps(res_data, indent=2, ensure_ascii=False)
+            if images:
+                img_md = "\n".join([f"![{img['filename']}]({img['url']})\nLink: {img['url']}" for img in images])
+                res_text += f"\n\n### Generated Images\n{img_md}"
             return web.json_response({
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {"isError": True, "content": [{"type": "text", "text": f"Generation timed out after {timeout_s}s. Prompt ID: {prompt_id}"}]}
+                "result": {"content": [{"type": "text", "text": res_text}]},
             })
-        elif tool_name == "gate_stop":
+        if tool_name == "gate_stop":
             client_ip = get_client_ip(request)
             if not s.can_stop(email=ident.email, ip=client_ip, is_owner=ident.is_owner):
                 return web.json_response({
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "result": {"isError": True, "content": [{"type": "text", "text": "Permission denied: only the session initiator or owner can stop it"}]}
+                    "result": {"isError": True, "content": [{"type": "text", "text": "Permission denied: only the session initiator or owner can stop it"}]},
                 })
             st = await s.stop("mcp agent requested stop")
             return web.json_response({
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {"content": [{"type": "text", "text": f"Session stopped. State: {st.value}"}]}
+                "result": {"content": [{"type": "text", "text": f"Session stopped. State: {st.value}"}]},
             })
         return web.json_response({
             "jsonrpc": "2.0",
             "id": req_id,
-            "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
+            "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"},
         })
 
     return web.json_response({
         "jsonrpc": "2.0",
         "id": req_id,
-        "error": {"code": -32601, "message": f"Method not supported: {method}"}
+        "error": {"code": -32601, "message": f"Method not supported: {method}"},
     })
 
 
 async def events(request: web.Request) -> web.StreamResponse:
     s = request.app[SESSION]
     ident = _ident(request)
-    cid = (request.query.get("cid") or
-           request.headers.get("CF-Connecting-IP") or
-           request.headers.get("X-Forwarded-For") or
-           request.remote or
-           str(id(request))).strip()
+    cid = (
+        request.query.get("cid")
+        or request.headers.get("CF-Connecting-IP")
+        or request.headers.get("X-Forwarded-For")
+        or request.remote
+        or str(id(request))
+    ).strip()
     try:
         since = int(request.query.get("since", 0))
     except (ValueError, TypeError):
         since = 0
-    resp = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
-                                       "X-Accel-Buffering": "no"})
+    resp = web.StreamResponse(
+        headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
     await resp.prepare(request)
 
     async def send(kind: str, data) -> None:
@@ -573,7 +807,7 @@ async def events(request: web.Request) -> web.StreamResponse:
 
 
 async def healthz(request: web.Request) -> web.Response:
-    return web.json_response({"ok": True, "state": request.app[SESSION].machine.state.value})
+    return web.json_response({"ok": True, "state": request.app[SESSION].machine.state.value, "mode": "batch"})
 
 
 async def robots_txt(request: web.Request) -> web.Response:
@@ -584,8 +818,8 @@ async def robots_txt(request: web.Request) -> web.Response:
     )
 
 
-async def wake_page(request: web.Request) -> web.Response:
-    html = (WEB / "index.html").read_text()
+async def studio_page(request: web.Request) -> web.Response:
+    html = (WEB / "index.html").read_text(encoding="utf-8")
     s = request.app[SESSION]
     ident = _ident(request)
     settings = request.app[SETTINGS]
@@ -600,16 +834,26 @@ async def wake_page(request: web.Request) -> web.Response:
         **st,
         "can_stop": can_stop,
         "can_wake": can_wake,
-        "you": {"email": ident.email, "owner": ident.is_owner, "ip": client_ip, "can_stop": can_stop, "can_wake": can_wake},
+        "you": {
+            "email": ident.email,
+            "kind": ident.kind,
+            "owner": ident.is_owner,
+            "ip": client_ip,
+            "can_stop": can_stop,
+            "can_wake": can_wake,
+        },
         "owner_only": list(settings.owner_only_actions),
     }
+    _, presets = _load_moss_builder()
     profiles_data = {
         "profiles": [p.summary() for p in request.app[PROFILES].values()],
         "default": settings.default_profile,
+        "presets": list(presets),
     }
     init_json = json.dumps({
         "status": status_data,
         "profiles": profiles_data,
+        "jobs": request.app[BATCH].list_jobs(limit=24),
         "logs": list(s.bus.logs),
     }).replace("</script>", "<\\/script>")
     tag = f'<script id="init-data">window.__INIT__ = {init_json};</script>'
@@ -622,53 +866,37 @@ async def wake_page(request: web.Request) -> web.Response:
 
 async def catch_all(request: web.Request) -> web.StreamResponse:
     s = request.app[SESSION]
-    s.touch()
     if request.path in ("/", "/index.html"):
+        ident = _ident(request)
         if request.app[SETTINGS].auto_stop.wake_on_visit and s.machine.state == State.SLEEPING:
-            await s.wake(None, by=_ident(request).email, ip=get_client_ip(request))
-        return await wake_page(request)
-    if s.machine.state == State.READY:
-        try:
-            return await request.app[PROXY].handle(request)
-        except Exception as e:  # noqa: BLE001
-            log.warning("proxy error: %s", e)
-            return err(502, "backend_unreachable", "ComfyUI backend unreachable")
+            can_wake = "wake" not in request.app[SETTINGS].owner_only_actions or ident.is_owner
+            if can_wake:
+                await s.wake(None, by=ident.email, ip=get_client_ip(request))
+        return await studio_page(request)
     api_prefixes = (
-        "/api", "/ws", "/prompt", "/view", "/view_metadata",
-        "/upload", "/object_info", "/embeddings", "/extensions",
-        "/system_stats", "/queue", "/interrupt", "/history"
+        "/api/",
+        "/ws",
+        "/object_info",
+        "/embeddings",
+        "/extensions",
+        "/system_stats",
+        "/view_metadata",
     )
     if any(request.path.startswith(p) for p in api_prefixes):
-        return err(503, "asleep", f"ComfyUI is {s.machine.state.value}; POST /_gate/wake first")
+        return err(404, "batch_mode_only", "Interactive ComfyUI reverse proxy is disabled in compliant batch mode")
     raise web.HTTPFound("/")
 
 
 async def background(app: web.Application) -> None:
-    s, proxy, settings = app[SESSION], app[PROXY], app[SETTINGS]
+    s, batch, settings = app[SESSION], app[BATCH], app[SETTINGS]
     sweep_every = max(1, settings.auto_stop.orphan_sweep_min) * 60
     last_sweep = 0.0
     loop = asyncio.get_running_loop()
-    consecutive_probe_failures = 0
     while True:
         await asyncio.sleep(30)
         try:
-            if s.machine.state == State.READY:
-                probe_ok = await proxy.probe()
-                if not probe_ok:
-                    consecutive_probe_failures += 1
-                    if consecutive_probe_failures >= 3:
-                        log.warning("backend probe failed %d times; reconciling with colab", consecutive_probe_failures)
-                        await s.reconcile()
-                else:
-                    consecutive_probe_failures = 0
-                    s.queue_busy = await proxy.queue_busy()
-                await proxy.heartbeat()
-            elif s.is_boot_state() and not s.boot_task_running() and await proxy.probe():
-                # re-attached after a gate restart and the backend answers
-                if s.machine.can(State.READY):
-                    s.machine.to(State.READY, "backend reachable after restart")
-                    s.persist()
             await s.tick()
+            batch.prune_outputs()
             if loop.time() - last_sweep > sweep_every:
                 last_sweep = loop.time()
                 if s.machine.state == State.SLEEPING:
@@ -681,14 +909,19 @@ async def background(app: web.Application) -> None:
                 bal = await s.colab.ccu_info()
                 if bal is not None:
                     s.ledger.balance = bal
+                    s.ledger.save()
         except ColabError as e:
             log.warning("background: %s", e)
         except Exception:  # noqa: BLE001
             log.exception("background loop error")
 
 
-def build_app(settings: Settings, colab: ColabRunner | None = None,
-              profiles: dict[str, Profile] | None = None, run_background: bool = True) -> web.Application:
+def build_app(
+    settings: Settings,
+    colab: ColabRunner | None = None,
+    profiles: dict[str, Profile] | None = None,
+    run_background: bool = True,
+) -> web.Application:
     app = web.Application(middlewares=[anti_crawler_mw, auth_mw], client_max_size=64 * 1024 * 1024)
     if profiles is None:
         profiles, errors = load_all(settings.profiles, REPO_ROOT)
@@ -697,14 +930,13 @@ def build_app(settings: Settings, colab: ColabRunner | None = None,
     app[SETTINGS] = settings
     app[PROFILES] = profiles
     app[PROFILE_ERRORS] = errors
-    app[JWKS] = (JWKSCache(settings.cf_access_team_domain, _fetch_json)
-                   if settings.cf_access_team_domain else None)
+    app[JWKS] = JWKSCache(settings.cf_access_team_domain, _fetch_json) if settings.cf_access_team_domain else None
     app[AGENT_TOKEN] = read_secret_file(settings.agent_token_file)
     session = Session(settings, profiles, colab or ColabCLI(settings.colab_bin, settings.colab_token_dir))
     session.restore()
     app[SESSION] = session
-    app[PROXY] = Proxy(settings.backend_url, settings.cf_service_token_file, session.touch,
-                       session.client_opened, session.client_closed)
+    batch = BatchDispatcher(settings, session)
+    app[BATCH] = batch
     db_path = Path(settings.state_dir) / "gate.db"
     db = GateDB(db_path)
     app[DB_KEY] = db
@@ -714,11 +946,23 @@ def build_app(settings: Settings, colab: ColabRunner | None = None,
     r.add_get("/_gate/status", status)
     r.add_get("/_gate/events", events)
     r.add_get("/_gate/profiles", profiles_route)
+    r.add_get("/_gate/jobs", jobs_route)
+    r.add_post("/_gate/txt2img", txt2img_route)
     r.add_post("/_gate/wake", wake)
     r.add_post("/_gate/switch", switch)
     r.add_post("/_gate/fetch", fetch)
     r.add_post("/_gate/stop", stop)
     r.add_post("/_gate/extend", extend)
+    # ComfyUI-compatible batch endpoints (handled locally on VPS, zero tunnel)
+    r.add_post("/upload/image", upload_image_route)
+    r.add_post("/prompt", prompt_route)
+    r.add_get("/history", history_route)
+    r.add_get("/history/{prompt_id}", history_route)
+    r.add_get("/view", view_route)
+    r.add_get("/queue", queue_route)
+    r.add_post("/queue", queue_route)
+    r.add_post("/interrupt", interrupt_route)
+    # MCP & Auth
     r.add_route("*", "/_gate/mcp", mcp_endpoint)
     r.add_route("*", "/mcp", mcp_endpoint)
     r.add_post("/api/auth/device/code", device_code_endpoint)
@@ -737,6 +981,7 @@ def build_app(settings: Settings, colab: ColabRunner | None = None,
     r.add_route("*", "/{tail:.*}", catch_all)
 
     async def on_startup(app: web.Application) -> None:
+        batch.start()
         await session.reconcile()
         if run_background:
             app[BG] = asyncio.create_task(background(app))
@@ -744,7 +989,7 @@ def build_app(settings: Settings, colab: ColabRunner | None = None,
     async def on_cleanup(app: web.Application) -> None:
         if BG in app:
             app[BG].cancel()
-        await app[PROXY].close()
+        await batch.close()
         session.persist()
 
     app.on_startup.append(on_startup)

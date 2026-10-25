@@ -12,8 +12,13 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 async def client(tmp_path, **env):
-    s = Settings.from_env({"AUTH_DISABLED": "true", "STATE_DIR": str(tmp_path), "DEFAULT_PROFILE": "tiny",
-                           "AGENT_TOKEN_FILE": "", **env})
+    s = Settings.from_env({
+        "AUTH_DISABLED": "true",
+        "STATE_DIR": str(tmp_path),
+        "DEFAULT_PROFILE": "tiny",
+        "AGENT_TOKEN_FILE": "",
+        **env,
+    })
     prof = {"tiny": load_profile(ROOT / "tests/fixtures/profiles/tiny")}
     app = build_app(s, FakeColab(), prof, run_background=False)
     c = TestClient(TestServer(app))
@@ -25,17 +30,24 @@ async def test_wake_page_and_api(tmp_path):
     c, app = await client(tmp_path)
     try:
         r = await c.get("/")
-        assert r.status == 200 and "Comfy Colab Kit" in await r.text()
+        html = await r.text()
+        assert r.status == 200 and "Comfy Colab Kit" in html
+        # Verify 3-state system theme toggle controls
+        assert 'data-theme-opt="auto"' in html
+        assert 'data-theme-opt="light"' in html
+        assert 'data-theme-opt="dark"' in html
         r = await c.get("/_gate/profiles")
         assert (await r.json())["profiles"][0]["id"] == "tiny"
+        r = await c.post("/prompt", json={"prompt": {"1": {"class_type": "SaveImage", "inputs": {}}}})
+        assert r.status == 503
         r = await c.post("/_gate/wake", json={"profile": "tiny"})
         assert r.status == 202
         r2 = await c.post("/_gate/wake", json={})
         assert r2.status == 200 and (await r2.json())["joined"] is True
         r = await c.post("/_gate/wake", json={"profile": "nope"})
         assert r.status in (200, 404)
-        r = await c.get("/api/queue")
-        assert r.status in (503, 502)
+        r = await c.get("/queue")
+        assert r.status == 200
         r = await c.get("/_gate/healthz")
         assert r.status == 200
     finally:
@@ -43,17 +55,24 @@ async def test_wake_page_and_api(tmp_path):
 
 
 async def test_requires_access_when_auth_enabled(tmp_path):
-    s = Settings.from_env({"CF_ACCESS_TEAM_DOMAIN": "t.cloudflareaccess.com", "CF_ACCESS_AUD": "x",
-                           "STATE_DIR": str(tmp_path)})
-    app = build_app(s, FakeColab(), {"tiny": load_profile(ROOT / "tests/fixtures/profiles/tiny")},
-                    run_background=False)
+    s = Settings.from_env({
+        "CF_ACCESS_TEAM_DOMAIN": "t.cloudflareaccess.com",
+        "CF_ACCESS_AUD": "x",
+        "STATE_DIR": str(tmp_path),
+    })
+    app = build_app(
+        s,
+        FakeColab(),
+        {"tiny": load_profile(ROOT / "tests/fixtures/profiles/tiny")},
+        run_background=False,
+    )
     c = TestClient(TestServer(app))
     await c.start_server()
     try:
         assert (await c.get("/_gate/status")).status == 401
         assert (await c.post("/_gate/wake")).status == 401
         assert (await c.get("/_gate/healthz")).status == 200
-        assert (await c.get("/_gate/static/overlay.js")).status == 200
+        assert (await c.get("/_gate/static/logo.svg")).status == 200
     finally:
         await c.close()
 
@@ -64,6 +83,7 @@ async def test_stop_endpoint(tmp_path):
         await c.post("/_gate/wake", json={})
         sess = app[SESSION]
         import asyncio
+
         for _ in range(200):
             if sess.machine.state == State.READY:
                 break
@@ -126,6 +146,7 @@ async def test_client_deduplication_by_cid(tmp_path):
         assert sess.open_clients == 2
         r2.close()
         import asyncio
+
         await asyncio.sleep(0.05)
         assert sess.open_clients == 1
     finally:
@@ -145,7 +166,10 @@ async def test_robots_txt_and_crawler_blocking(tmp_path):
         r = await c.get("/")
         assert r.headers.get("X-Robots-Tag") == "noindex, nofollow, noarchive, nosnippet"
 
-        r_bot = await c.get("/", headers={"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"})
+        r_bot = await c.get(
+            "/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"},
+        )
         assert r_bot.status == 403
         assert "forbidden" in (await r_bot.text()).lower()
     finally:
@@ -182,37 +206,32 @@ async def test_mcp_endpoint(tmp_path):
 
 
 async def test_stop_restricted_to_initiator_and_owner(tmp_path):
-    # Mode A (collaborative): non-owners can wake, but only the initiator or owner can stop
     c, app = await client(tmp_path, OWNER_ONLY_CONTROL="false", OWNER_EMAILS="boss@firetable.tech")
     try:
-        # Wake from IP 1.1.1.1
         r = await c.post("/_gate/wake", json={}, headers={"CF-Connecting-IP": "1.1.1.1"})
         assert r.status == 202
 
         sess = app[SESSION]
         import asyncio
+
         for _ in range(200):
             if sess.machine.state == State.READY:
                 break
             await asyncio.sleep(0.01)
 
-        # Another user from IP 2.2.2.2 checks status: can_stop is False
         r = await c.get("/_gate/status", headers={"CF-Connecting-IP": "2.2.2.2"})
         status_data = await r.json()
         assert status_data["can_stop"] is False
         assert status_data["you"]["can_stop"] is False
 
-        # Another user from IP 2.2.2.2 attempts stop: 403 Forbidden
         r = await c.post("/_gate/stop", headers={"CF-Connecting-IP": "2.2.2.2"})
         assert r.status == 403
         err_data = await r.json()
         assert err_data["error"] == "not_initiator"
 
-        # Initiator from IP 1.1.1.1 checks status: can_stop is True
         r = await c.get("/_gate/status", headers={"CF-Connecting-IP": "1.1.1.1"})
         assert (await r.json())["can_stop"] is True
 
-        # Initiator from IP 1.1.1.1 calls stop: 200 OK
         r = await c.post("/_gate/stop", headers={"CF-Connecting-IP": "1.1.1.1"})
         assert r.status == 200
         assert (await r.json())["state"] == "sleeping"
@@ -221,10 +240,8 @@ async def test_stop_restricted_to_initiator_and_owner(tmp_path):
 
 
 async def test_owner_only_control_mode(tmp_path):
-    # Mode where only owner can wake AND only owner can stop
     c, app = await client(tmp_path, OWNER_ONLY_CONTROL="true", OWNER_EMAILS="boss@firetable.tech")
     try:
-        # Non-owner checks status: can_wake and can_stop are False, cu and woken_by are null
         r = await c.get("/_gate/status", headers={"CF-Connecting-IP": "2.2.2.2"})
         status_data = await r.json()
         assert status_data["can_wake"] is False
@@ -232,17 +249,13 @@ async def test_owner_only_control_mode(tmp_path):
         assert status_data["cu"] is None
         assert status_data["woken_by"] is None
 
-        # Wake page initial data also masks cu and woken_by for non-owner
         r_page = await c.get("/", headers={"CF-Connecting-IP": "2.2.2.2"})
         page_html = await r_page.text()
         assert '"cu": null' in page_html or '"cu":null' in page_html
         assert '"woken_by": null' in page_html or '"woken_by":null' in page_html
 
-        # Non-owner attempts wake: 403 owner_only
         r = await c.post("/_gate/wake", json={}, headers={"CF-Connecting-IP": "2.2.2.2"})
         assert r.status == 403
         assert (await r.json())["error"] == "owner_only"
     finally:
         await c.close()
-
-

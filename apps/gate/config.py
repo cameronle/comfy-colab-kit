@@ -84,27 +84,26 @@ def in_quiet_hours(window: tuple[dtime, dtime] | None, now: dtime) -> bool:
 
 @dataclass(frozen=True)
 class AutoStop:
-    idle_timeout_min: int = 30
+    idle_timeout_min: int = 10
     max_session_hours: float = 6.0
     extend_max_times: int = 1
     extend_hours: float = 1.0
     warn_before_min: int = 10
     boot_timeout_min: int = 40
-    stop_on_page_close_min: int = 5
+    stop_on_page_close_min: int = 0
     quiet_hours: tuple[dtime, dtime] | None = None
     daily_cu_budget: float = 12.0
     monthly_cu_budget: float = 150.0
-    min_cu_balance: float = 5.0
+    min_cu_balance: float = 10.0
+    require_cu_balance: bool = True
     cu_per_hour: float = 1.71
     orphan_sweep_min: int = 5
-    watchdog_gate_lost_min: int = 20
     wake_on_visit: bool = False
 
 
 @dataclass(frozen=True)
 class Settings:
     public_host: str = "comfy.example.com"
-    colab_tunnel_host: str = "comfy-colab.example.com"
     cf_access_team_domain: str = ""
     cf_access_aud: str = ""
     allowed_emails: tuple[str, ...] = ()
@@ -112,15 +111,17 @@ class Settings:
     owner_only_actions: tuple[str, ...] = ("wake", "stop", "switch", "extend")
     owner_only_control: bool = True
     auth_disabled: bool = False
-    cf_service_token_file: str = ""
-    cf_tunnel_token_file: str = ""
     hf_token_file: str = ""
     agent_token_file: str = ""
     colab_bin: str = "colab"
     colab_token_dir: str = ""
     colab_accelerator: str = "L4"
     colab_session_name: str = "comfy"
-    profiles: tuple[str, ...] = ("profiles/examples/moss-image", "profiles/examples/sd-latest", "profiles/examples/qwen-image")
+    profiles: tuple[str, ...] = (
+        "profiles/examples/moss-image",
+        "profiles/examples/sd-latest",
+        "profiles/examples/qwen-image",
+    )
     default_profile: str = "moss-image"
     default_view: str = "app"
     fast_start: bool = True
@@ -128,15 +129,13 @@ class Settings:
     xet_high_performance: bool = True
     pip_installer: str = "uv"
     enable_smoke_test: bool = False
-    listen_host: str = "0.0.0.0"
+    listen_host: str = "127.0.0.1"
     listen_port: int = 8080
     state_dir: str = "/data/state"
+    max_output_files: int = 100
+    output_retention_days: int = 3
     log_level: str = "info"
     auto_stop: AutoStop = field(default_factory=AutoStop)
-
-    @property
-    def backend_url(self) -> str:
-        return f"https://{self.colab_tunnel_host}"
 
     @staticmethod
     def from_env(env: Mapping[str, str] | None = None) -> "Settings":
@@ -156,13 +155,12 @@ class Settings:
         view = (env.get("DEFAULT_VIEW") or "app").strip().lower()
         if view not in ("app", "graph"):
             raise ConfigError("DEFAULT_VIEW must be 'app' or 'graph'")
-        listen = (env.get("LISTEN_ADDR") or "0.0.0.0:8080").strip()
+        listen = (env.get("LISTEN_ADDR") or "127.0.0.1:8080").strip()
         host, _, port = listen.rpartition(":")
         if not host or not port.isdigit():
             raise ConfigError(f"LISTEN_ADDR must be host:port, got {listen!r}")
-        tunnel_host = (env.get("COLAB_TUNNEL_HOST") or env.get("COLAB_BACKEND_HOST") or "comfy-colab.example.com").strip()
         auto = AutoStop(
-            idle_timeout_min=_int(env, "IDLE_TIMEOUT_MIN", 30),
+            idle_timeout_min=_int(env, "IDLE_TIMEOUT_MIN", 10),
             max_session_hours=_float(env, "MAX_SESSION_HOURS", 6.0, 0.1),
             extend_max_times=_int(env, "EXTEND_MAX_TIMES", 1),
             extend_hours=_float(env, "EXTEND_HOURS", 1.0, 0.1),
@@ -172,15 +170,14 @@ class Settings:
             quiet_hours=parse_quiet_hours(env.get("QUIET_HOURS")),
             daily_cu_budget=_float(env, "DAILY_CU_BUDGET", 12.0),
             monthly_cu_budget=_float(env, "MONTHLY_CU_BUDGET", 150.0),
-            min_cu_balance=_float(env, "MIN_CU_BALANCE", 5.0),
+            min_cu_balance=_float(env, "MIN_CU_BALANCE", 10.0),
+            require_cu_balance=_bool(env, "REQUIRE_CU_BALANCE", True),
             cu_per_hour=_float(env, "CU_PER_HOUR", 1.71, 0.01),
             orphan_sweep_min=_int(env, "ORPHAN_SWEEP_MIN", 5),
-            watchdog_gate_lost_min=_int(env, "WATCHDOG_GATE_LOST_MIN", 20),
             wake_on_visit=_bool(env, "WAKE_ON_VISIT", False),
         )
         s = Settings(
             public_host=(env.get("PUBLIC_HOST") or "comfy.example.com").strip(),
-            colab_tunnel_host=tunnel_host,
             cf_access_team_domain=(env.get("CF_ACCESS_TEAM_DOMAIN") or "").strip(),
             cf_access_aud=(env.get("CF_ACCESS_AUD") or "").strip(),
             allowed_emails=tuple(e.lower() for e in _csv(env.get("ALLOWED_EMAILS"))),
@@ -188,8 +185,6 @@ class Settings:
             owner_only_actions=owner_only,
             owner_only_control=owner_only_control,
             auth_disabled=_bool(env, "AUTH_DISABLED", False),
-            cf_service_token_file=(env.get("CF_SERVICE_TOKEN_FILE") or "").strip(),
-            cf_tunnel_token_file=(env.get("CF_TUNNEL_TOKEN_FILE") or "").strip(),
             hf_token_file=(env.get("HF_TOKEN_FILE") or "").strip(),
             agent_token_file=(env.get("AGENT_TOKEN_FILE") or "").strip(),
             colab_bin=(env.get("COLAB_BIN") or "colab").strip(),
@@ -207,6 +202,8 @@ class Settings:
             listen_host=host,
             listen_port=int(port),
             state_dir=(env.get("STATE_DIR") or "/data/state").strip(),
+            max_output_files=_int(env, "MAX_OUTPUT_FILES", 100, 1),
+            output_retention_days=_int(env, "OUTPUT_RETENTION_DAYS", 3, 1),
             log_level=(env.get("LOG_LEVEL") or "info").strip(),
             auto_stop=auto,
         )

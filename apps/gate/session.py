@@ -1,14 +1,17 @@
-"""One global, shared session.
+"""One global, shared Colab batch session.
 
 * Exactly one Colab VM per gate. `wake()` is idempotent: whoever calls it while a
   session is booting or ready simply joins it (no second `colab new`).
 * All state changes and setup log lines are broadcast to every connected page (SSE).
 * State is persisted to STATE_DIR/session.json so a gate restart re-attaches
   instead of launching a duplicate VM.
+* On `stop()`, server-side `colab sessions` is read back to prove the runtime
+  assignment actually disappeared.
 """
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import re
@@ -34,8 +37,9 @@ log = logging.getLogger("gate.session")
 _SECRET_PATTERNS = [
     re.compile(r"Bearer\s+[A-Za-z0-9_\-\.]{20,}", re.IGNORECASE),
     re.compile(r"hf_[A-Za-z0-9]{20,}"),
+    re.compile(r"sk_agent_[A-Za-z0-9]{20,}"),
     re.compile(r"ey[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}"),
-    re.compile(r"(?:CF_TUNNEL_TOKEN|HF_TOKEN)['\":= ]+([A-Za-z0-9_\-\.]{20,})"),
+    re.compile(r"(?:HF_TOKEN)['\":= ]+([A-Za-z0-9_\-\.]{20,})"),
 ]
 
 
@@ -46,15 +50,12 @@ def redact_secrets(text: str) -> str:
 
 
 def _find_repo_root() -> Path:
-    # 1. Check current working directory
     cwd = Path.cwd().resolve()
     for p in [cwd] + list(cwd.parents):
         if (p / "pyproject.toml").is_file():
             return p
-    # 2. Check /app (standard Docker container location)
     if Path("/app/pyproject.toml").is_file():
         return Path("/app")
-    # 3. Check source file ancestry (editable installs or local checkout)
     cur = Path(__file__).resolve()
     for p in [cur] + list(cur.parents):
         if (p / "pyproject.toml").is_file():
@@ -116,12 +117,17 @@ class Broadcaster:
             try:
                 q.put_nowait((kind, data))
             except asyncio.QueueFull:
-                pass  # slow client; it will resync from /_gate/status
+                pass
 
 
 class Session:
-    def __init__(self, settings: Settings, profiles: dict[str, Profile], colab: ColabRunner,
-                 clock: Callable[[], float] = time.time):
+    def __init__(
+        self,
+        settings: Settings,
+        profiles: dict[str, Profile],
+        colab: ColabRunner,
+        clock: Callable[[], float] = time.time,
+    ):
         self.settings, self.profiles, self.colab, self.clock = settings, profiles, colab, clock
         self.machine = Machine(clock=clock)
         self.lock = asyncio.Lock()
@@ -141,7 +147,7 @@ class Session:
         self.workflows: list[str] | None = None
         self._task: asyncio.Task | None = None
         self._fetch_task: asyncio.Task | None = None
-        self.on_demand: list[str] = []      # installed workflows whose models are not on the VM yet
+        self.on_demand: list[str] = []
         self.fetching: list[str] = []
         self.fetch_error = ""
         self._last_accrual = clock()
@@ -191,12 +197,19 @@ class Session:
     def persist(self) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps({**self.machine.snapshot(), "workflows": self.workflows,
-                                   "woken_by": self.woken_by,
-                                   "woken_by_ip": self.woken_by_ip,
-                                   "last_activity": self.last_activity,
-                                   "progress": self.progress,
-                                   "stage_durations": self.stage_durations}))
+        tmp.write_text(
+            json.dumps(
+                {
+                    **self.machine.snapshot(),
+                    "workflows": self.workflows,
+                    "woken_by": self.woken_by,
+                    "woken_by_ip": self.woken_by_ip,
+                    "last_activity": self.last_activity,
+                    "progress": self.progress,
+                    "stage_durations": self.stage_durations,
+                }
+            )
+        )
         tmp.replace(self.state_file)
 
     def restore(self) -> None:
@@ -221,7 +234,7 @@ class Session:
             self.progress = d.get("progress") or {}
             self.stage_durations = d.get("stage_durations") or {}
             if st == State.STOPPING:
-                m.state = State.FAILED  # stop was interrupted; tick() will retry it
+                m.state = State.FAILED
                 m.reason = "stop interrupted by gate restart"
         if self.log_file.is_file():
             try:
@@ -235,7 +248,7 @@ class Session:
                 log.warning("failed to restore logs from %s: %s", self.log_file, e)
 
     async def reconcile(self) -> None:
-        """After restart: if we think a VM exists, check Colab still has it."""
+        """After restart: verify server-side Colab session existence and readiness."""
         if not self.machine.is_billing:
             return
         try:
@@ -246,14 +259,14 @@ class Session:
         if self.settings.colab_session_name not in names:
             async with self.lock:
                 self._force(State.SLEEPING, "VM gone (released outside the gate)")
-        else:
-            try:
-                await self.colab.touch_heartbeat(self.settings.colab_session_name)
-            except Exception as e:
-                log.warning("colab touch_heartbeat failed: %s", e)
-            if self.machine.is_booting:
-                # setup output stream is lost on restart; the VM keeps booting, readiness is probed via the tunnel
-                self.bus.publish("log", "gate restarted during boot; re-attaching and probing backend")
+            return
+        if self.machine.is_booting and not self.boot_task_running():
+            self.bus.publish("log", "gate restarted during boot; checking Colab runtime readiness")
+            if await self.colab.check_ready(self.settings.colab_session_name):
+                async with self.lock:
+                    if self.machine.can(State.READY):
+                        self.machine.to(State.READY, "headless runtime ready after restart")
+                        self.persist()
 
     def _force(self, st: State, reason: str) -> None:
         m = self.machine
@@ -271,6 +284,12 @@ class Session:
         snap = self._snapshot()
         d = stopper.evaluate(self.settings.auto_stop, snap)
         now = self.clock()
+        idle_remaining_s = None
+        if m.state == State.READY and not self.queue_busy and self.settings.auto_stop.idle_timeout_min:
+            idle_remaining_s = max(
+                0.0,
+                round(self.settings.auto_stop.idle_timeout_min * 60 - (now - self.last_activity), 1),
+            )
         durs = {}
         for k, v in self.stage_durations.items():
             dur = v.get("duration")
@@ -282,48 +301,71 @@ class Session:
             }
         return {
             **m.snapshot(),
+            "mode": "batch",
             "woken_by": self.woken_by,
             "server_time": now,
-            "busy": m.state not in (State.SLEEPING, State.READY, State.FAILED),
+            "busy": m.state not in (State.SLEEPING, State.READY, State.FAILED) or self.queue_busy,
+            "queue_busy": self.queue_busy,
             "progress": self.progress,
             "stage_durations": durs,
             "enable_smoke_test": self.settings.enable_smoke_test,
             "remaining_s": d.remaining_s,
+            "idle_remaining_s": idle_remaining_s,
+            "idle_timeout_min": self.settings.auto_stop.idle_timeout_min,
             "warn": d.warn,
             "can_extend": stopper.can_extend(self.settings.auto_stop, m.extends_used),
-            "cu": {"today": self.ledger.today(), "month": self.ledger.month(), "balance": self.ledger.balance,
-                   "per_hour": self.settings.auto_stop.cu_per_hour},
-            "backend_url": self.settings.backend_url,
+            "cu": {
+                "today": self.ledger.today(),
+                "month": self.ledger.month(),
+                "balance": self.ledger.balance,
+                "min_balance": self.settings.auto_stop.min_cu_balance,
+                "per_hour": self.settings.auto_stop.cu_per_hour,
+            },
             "clients": self.open_clients,
             "default_view": self.settings.default_view,
-            "models": {"on_demand": list(self.on_demand), "fetching": list(self.fetching),
-                       "fetch_error": self.fetch_error},
+            "models": {
+                "on_demand": list(self.on_demand),
+                "fetching": list(self.fetching),
+                "fetch_error": self.fetch_error,
+            },
         }
 
     def reload_profiles(self) -> dict[str, str]:
-        """Re-read profiles from disk (bind-mounted, read-only) so edits apply on the next wake without a
-        restart. Updates the shared dict in place; a profile that fails to load keeps its last good version."""
         from .profiles import load_all
+
         fresh, errors = load_all(self.settings.profiles, REPO_ROOT)
         for ref, err in errors.items():
             log.warning("profile reload failed for %s: %s (keeping last good)", ref, err)
-        # new/changed profiles apply now; removing one from PROFILES needs a restart
         self.profiles.update(fresh)
         return errors
 
-    async def wake(self, profile_id: str | None, by: str = "", ip: str = "", workflows: list[str] | None = None) -> WakeResult:
+    async def wake(
+        self,
+        profile_id: str | None,
+        by: str = "",
+        ip: str = "",
+        workflows: list[str] | None = None,
+    ) -> WakeResult:
         async with self.lock:
             if self.machine.state in (State.SLEEPING, State.FAILED):
                 self.reload_profiles()
             m = self.machine
             if m.state not in (State.SLEEPING, State.FAILED):
-                # someone already started it: join the in-flight / running session
                 return WakeResult(True, m.state.value, m.profile)
             pid = profile_id or self.settings.default_profile
             if pid not in self.profiles:
                 raise KeyError(pid)
-            ok, why = stopper.admit_wake(self.settings.auto_stop, self.clock(), self.ledger.today(),
-                                         self.ledger.month(), self.ledger.balance)
+            live_bal = await self.colab.ccu_info()
+            self.ledger.balance = live_bal
+            if live_bal is not None:
+                self.ledger.save()
+            ok, why = stopper.admit_wake(
+                self.settings.auto_stop,
+                self.clock(),
+                self.ledger.today(),
+                self.ledger.month(),
+                self.ledger.balance,
+            )
             if not ok:
                 return WakeResult(False, m.state.value, m.profile, refused=why)
             if m.state == State.FAILED:
@@ -342,47 +384,31 @@ class Session:
             return WakeResult(False, m.state.value, pid)
 
     def can_stop(self, email: str = "", ip: str = "", is_owner: bool = False) -> bool:
-        """Evaluate if the caller is authorized to stop this session."""
         if self.machine.state == State.SLEEPING:
             return False
-
-        # 1. Configured super-admin / owner email can always stop
         if is_owner and email and email != "dev@localhost" and self.settings.owner_emails:
             if email.lower() in self.settings.owner_emails:
                 return True
-
-        # If owner-only control is enabled, non-owners cannot stop
         if self.settings.owner_only_control and not is_owner:
             return False
-
-        # 2. Check if the caller is the initiator who woke the session
-        # 2a. Match by authenticated user email
         if self.woken_by and email and email != "dev@localhost":
             if email.lower() == self.woken_by.lower():
                 return True
-
-        # 2b. Match by client IP address
         if self.woken_by_ip and ip:
             if ip.strip() == self.woken_by_ip.strip():
                 return True
-
-        # 3. Dev / unauthenticated mode fallback:
-        # If caller has dev/general owner identity
         if is_owner and (not self.settings.owner_emails or email.lower() in self.settings.owner_emails):
-            # If auth is disabled and we have an initiator IP recorded, enforce IP match
             if email == "dev@localhost" and self.woken_by_ip:
                 return False
             return True
-
-        # 4. Fallback if no initiator was recorded (e.g. legacy state)
         if not self.woken_by and not self.woken_by_ip:
             return is_owner or not self.settings.owner_emails
-
         return False
 
-    async def stop(self, reason: str) -> None:
+    async def stop(self, reason: str) -> State:
         async with self.lock:
             await self._stop_locked(reason)
+            return self.machine.state
 
     async def extend(self) -> bool:
         async with self.lock:
@@ -394,7 +420,6 @@ class Session:
             return True
 
     async def switch(self, profile_id: str, by: str = "", ip: str = "") -> WakeResult:
-        """v1: cold switch (stop, then wake with the new profile)."""
         self.reload_profiles()
         if profile_id not in self.profiles:
             raise KeyError(profile_id)
@@ -405,7 +430,6 @@ class Session:
         return await self.wake(profile_id, by=by, ip=ip)
 
     async def fetch(self, workflow_ids: list[str]) -> str:
-        """Download the models of extra workflows onto the running VM (on demand). Returns '' or a refusal."""
         m = self.machine
         if m.state != State.READY or not m.profile:
             return "not_ready"
@@ -427,8 +451,10 @@ class Session:
             json.dump(plan, fd)
             fd.close()
             await self.colab.upload(name, fd.name, "/content/kit/fetch-plan.json")
-            code = ("import os, runpy\nos.environ['KIT_PLAN']='/content/kit/fetch-plan.json'\n"
-                    "_kit = runpy.run_path('/content/kit/colab/setup.py', run_name='__main__'); del _kit\n")
+            code = (
+                "import os, runpy\nos.environ['KIT_PLAN']='/content/kit/fetch-plan.json'\n"
+                "_kit = runpy.run_path('/content/kit/colab/setup.py', run_name='__main__'); del _kit\n"
+            )
             async for line in self.colab.exec_stream(name, code, self.settings.auto_stop.boot_timeout_min * 60):
                 self.handle_line(line)
         except asyncio.CancelledError:
@@ -468,23 +494,39 @@ class Session:
             return
         if self._task and not self._task.done() and self._task is not asyncio.current_task():
             self._task.cancel()
-        self._accrue()  # bill up to now while still in a billing state
+        self._accrue()
         if m.state != State.STOPPING:
             if not m.can(State.STOPPING):
                 m.to(State.FAILED, reason)
             m.to(State.STOPPING, reason)
         self.persist()
+        name = self.settings.colab_session_name
         try:
-            await self.colab.stop(self.settings.colab_session_name)
+            await self.colab.stop(name)
         except ColabError as e:
             msg = str(e).lower()
             if any(k in msg for k in ("not found", "no such", "404", "unknown", "already")):
-                log.info("colab stop %s: instance already gone (%s)", self.settings.colab_session_name, e)
+                log.info("colab stop %s: instance already gone (%s)", name, e)
             else:
                 self.bus.publish("log", f"stop error: {e}")
                 m.to(State.FAILED, f"stop failed: {e}")
                 self.persist()
                 return
+        # Read back server-side session list to verify release
+        try:
+            remaining = await self.colab.sessions()
+            if name in remaining:
+                self.bus.publish("log", f"session '{name}' still listed after stop; retrying once")
+                await self.colab.stop(name)
+                remaining = await self.colab.sessions()
+                if name in remaining:
+                    self.bus.publish("log", f"stop verification failed: '{name}' still active on Colab server")
+                    m.to(State.FAILED, f"stop verification failed: {name} still active")
+                    self.persist()
+                    return
+        except ColabError as e:
+            log.warning("post-stop session readback warning: %s", e)
+
         m.to(State.SLEEPING, reason)
         self.woken_by = ""
         self.woken_by_ip = ""
@@ -504,10 +546,19 @@ class Session:
     def _snapshot(self) -> stopper.Snapshot:
         m = self.machine
         return stopper.Snapshot(
-            now=self.clock(), state=m.state, state_since=m.since, session_started=m.session_started,
-            last_activity=self.last_activity, queue_busy=self.queue_busy, open_clients=self.open_clients,
-            clients_zero_since=self.clients_zero_since, extends_used=m.extends_used,
-            cu_today=self.ledger.today(), cu_month=self.ledger.month(), cu_balance=self.ledger.balance)
+            now=self.clock(),
+            state=m.state,
+            state_since=m.since,
+            session_started=m.session_started,
+            last_activity=self.last_activity,
+            queue_busy=self.queue_busy,
+            open_clients=self.open_clients,
+            clients_zero_since=self.clients_zero_since,
+            extends_used=m.extends_used,
+            cu_today=self.ledger.today(),
+            cu_month=self.ledger.month(),
+            cu_balance=self.ledger.balance,
+        )
 
     async def tick(self) -> stopper.Decision:
         self._accrue()
@@ -524,21 +575,20 @@ class Session:
         fd = tempfile.NamedTemporaryFile(suffix=".tgz", delete=False)
         colab_dir = REPO_ROOT / "packages/colab" if (REPO_ROOT / "packages/colab").is_dir() else REPO_ROOT / "colab"
         with tarfile.open(fileobj=fd, mode="w:gz") as tar:
-            tar.add(colab_dir, arcname="colab",
-                    filter=lambda ti: None if "__pycache__" in ti.name else ti)
+            tar.add(
+                colab_dir,
+                arcname="colab",
+                filter=lambda ti: None if "__pycache__" in ti.name else ti,
+            )
             data = json.dumps(plan).encode()
             info = tarfile.TarInfo("plan.json")
             info.size = len(data)
-            import io
             tar.addfile(info, io.BytesIO(data))
         fd.close()
         return fd.name
 
     def _bootstrap_code(self) -> str:
         secrets = {}
-        tok = read_secret_file(self.settings.cf_tunnel_token_file)
-        if tok:
-            secrets["CF_TUNNEL_TOKEN"] = tok
         hf = read_secret_file(self.settings.hf_token_file)
         if hf:
             secrets["HF_TOKEN"] = hf
@@ -549,15 +599,11 @@ class Session:
             "tar -xzf /content/kit.tgz -C /content/kit'], check=True)\n"
             f"os.environ.update(json.loads({json.dumps(json.dumps(secrets))}))\n"
             "os.environ['KIT_PLAN']='/content/kit/plan.json'\n"
-            # assign the result: a bare expression would make IPython pretty-print setup.py's globals
             "_kit = runpy.run_path('/content/kit/colab/setup.py', run_name='__main__'); del _kit\n"
         )
 
     def handle_line(self, line: str) -> None:
-        """Parse setup.py protocol lines; everything is also forwarded as a log line."""
         clean = redact_secrets(line)
-        if clean.startswith("KIT_KEEPALIVE"):
-            return  # keepalive ping to prevent Colab idle reaper; don't flood logs
         self.bus.publish("log", clean)
         parts = clean.split(" ", 3)
         if clean.startswith("KIT_STAGE ") and len(parts) >= 3:
@@ -566,8 +612,13 @@ class Session:
             if parts[2] == "done" and len(parts) >= 4:
                 try:
                     dur = float(parts[3])
-                    smap = {"bootstrap": "installing", "deps": "installing", "download": "downloading",
-                            "comfy_boot": "booting", "smoke": "smoke_testing"}
+                    smap = {
+                        "bootstrap": "installing",
+                        "deps": "installing",
+                        "download": "downloading",
+                        "comfy_boot": "booting",
+                        "smoke": "smoke_testing",
+                    }
                     gk = smap.get(parts[1])
                     if gk and gk in self.stage_durations:
                         self.stage_durations[gk]["duration"] = round(dur, 1)
@@ -593,10 +644,10 @@ class Session:
             if self.machine.state != State.READY and self.machine.can(State.READY):
                 self.clients_zero_since = self.clock() if self.open_clients == 0 else None
                 self.touch()
-                self.machine.to(State.READY, "ComfyUI ready")
+                self.machine.to(State.READY, "ComfyUI batch runtime ready")
         elif clean.startswith("KIT_FAILED"):
             if self.machine.state not in (State.FAILED, State.STOPPING, State.SLEEPING):
-                self.machine.to(State.FAILED, clean[len("KIT_FAILED"):].strip() or "setup failed")
+                self.machine.to(State.FAILED, clean[len("KIT_FAILED") :].strip() or "setup failed")
         self.persist()
 
     async def _boot(self, pid: str) -> None:
@@ -620,7 +671,7 @@ class Session:
                     async for line in self.colab.exec_stream(name, self._bootstrap_code(), timeout):
                         self.handle_line(line)
                     break
-                except ColabError as ce:
+                except ColabError:
                     if self.machine.state not in (State.READY, State.FAILED) and attempt < 3 and not self.progress.get("stage"):
                         self.bus.publish("log", f"Colab kernel connection reset; retrying ({attempt}/3) in 3s …")
                         await asyncio.sleep(3)

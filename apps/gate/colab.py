@@ -1,8 +1,9 @@
-"""Thin async wrapper around the `colab` CLI (google-colab-cli).
+"""Thin async wrapper around the official `colab` CLI (google-colab-cli).
 
 The gate is the only component holding the Colab OAuth token (COLAB_TOKEN_DIR).
-Secrets for the VM are sent on stdin of `colab exec` (never on argv) so they
-do not show up in process listings.
+Every CLI invocation explicitly passes `--auth oauth2` so ambient ADC or service
+accounts are never used accidentally. Secrets for the VM are sent on stdin of
+`colab exec` (never on argv) so they do not show up in process listings.
 """
 from __future__ import annotations
 
@@ -24,10 +25,12 @@ class ColabRunner(Protocol):
     async def sessions(self) -> list[str]: ...
     async def new(self, name: str, accelerator: str) -> None: ...
     async def upload(self, name: str, src: str, dst: str) -> None: ...
+    async def download(self, name: str, remote_path: str, local_path: str) -> None: ...
     def exec_stream(self, name: str, code: str, timeout_s: int) -> AsyncIterator[str]: ...
+    async def restart_kernel(self, name: str) -> None: ...
+    async def check_ready(self, name: str) -> bool: ...
     async def stop(self, name: str) -> None: ...
     async def ccu_info(self) -> float | None: ...
-    async def touch_heartbeat(self, name: str) -> bool: ...
 
 
 class ColabCLI:
@@ -38,14 +41,20 @@ class ColabCLI:
             # google-colab-cli keeps its token under ~/.config/colab-cli; point HOME-relative config there
             self.env["XDG_CONFIG_HOME"] = token_dir
         # the CLI is Python: without this its stdout is block-buffered on a pipe and `exec` output
-        # (setup progress) would only arrive in 4-8 KB chunks or at the very end
+        # (setup/job progress) would only arrive in 4-8 KB chunks or at the very end
         self.env["PYTHONUNBUFFERED"] = "1"
 
     async def _run(self, *args: str, stdin: str | None = None, timeout: float = 600) -> str:
         proc = await asyncio.create_subprocess_exec(
-            self.binary, *args, env=self.env,
+            self.binary,
+            "--auth",
+            "oauth2",
+            *args,
+            env=self.env,
             stdin=asyncio.subprocess.PIPE if stdin is not None else None,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
         try:
             out, _ = await asyncio.wait_for(proc.communicate(stdin.encode() if stdin else None), timeout)
         except asyncio.TimeoutError as e:
@@ -72,10 +81,24 @@ class ColabCLI:
     async def upload(self, name: str, src: str, dst: str) -> None:
         await self._run("upload", "-s", name, src, dst, timeout=600)
 
+    async def download(self, name: str, remote_path: str, local_path: str) -> None:
+        await self._run("download", "-s", name, remote_path, local_path, timeout=600)
+
     async def exec_stream(self, name: str, code: str, timeout_s: int):
         proc = await asyncio.create_subprocess_exec(
-            self.binary, "exec", "-s", name, "--timeout", str(timeout_s), env=self.env,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            self.binary,
+            "--auth",
+            "oauth2",
+            "exec",
+            "-s",
+            name,
+            "--timeout",
+            str(timeout_s),
+            env=self.env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
         assert proc.stdin and proc.stdout
         proc.stdin.write(code.encode())
         await proc.stdin.drain()
@@ -85,6 +108,18 @@ class ColabCLI:
         rc = await proc.wait()
         if rc:
             raise ColabError(f"colab exec exited with {rc}")
+
+    async def restart_kernel(self, name: str) -> None:
+        await self._run("restart-kernel", "-s", name, timeout=120)
+
+    async def check_ready(self, name: str) -> bool:
+        try:
+            code = "import os; print('KIT_OK' if os.path.isfile('/content/kit/runtime_config.json') else 'KIT_MISSING')\n"
+            out = await self._run("exec", "-s", name, "--timeout", "15", stdin=code, timeout=20)
+            return "KIT_OK" in out
+        except Exception as e:
+            log.warning("check_ready via colab exec failed: %s", e)
+            return False
 
     async def stop(self, name: str) -> None:
         try:
@@ -103,21 +138,15 @@ class ColabCLI:
             return None
         return parse_ccu_balance(out)
 
-    async def touch_heartbeat(self, name: str) -> bool:
-        try:
-            code = "import time; open('/content/kit_heartbeat', 'w').write(str(time.time()))\n"
-            await self._run("exec", "-s", name, "--timeout", "20", stdin=code, timeout=25)
-            return True
-        except Exception as e:
-            log.warning("touch_heartbeat via colab exec failed: %s", e)
-            return False
-
 
 def parse_sessions(text: str) -> list[str]:
     """`colab sessions` (0.7.x) prints one line per server-side assignment:
     `[name] endpoint | Hardware: L4 | Shape: ... | Variant: GPU`; `[?]` = assignment with no local name."""
-    return [m.group(1) for line in text.splitlines()
-            if " | " in line and (m := re.match(r"^\s*\[([^\]]+)\]\s", line))]
+    return [
+        m.group(1)
+        for line in text.splitlines()
+        if " | " in line and (m := re.match(r"^\s*\[([^\]]+)\]\s", line))
+    ]
 
 
 def parse_ccu_balance(text: str) -> float | None:

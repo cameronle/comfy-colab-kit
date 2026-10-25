@@ -1,1669 +1,837 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <script>
 (function() {
   try {
-    var saved = localStorage.getItem('kit.theme');
+    var mode = localStorage.getItem('kit.theme_mode') || 'auto';
     var sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    var theme = saved ? saved : (sysDark ? 'dark' : 'light');
-    document.documentElement.setAttribute('data-theme', theme);
+    var resolved = (mode === 'light' || mode === 'dark') ? mode : (sysDark ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme-mode', mode);
+    document.documentElement.setAttribute('data-theme', resolved);
   } catch (e) {}
 })();
 </script>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
-<meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet">
-<title>Comfy Colab Kit</title>
+<title>Comfy Colab Kit · Batch Studio</title>
 <link rel="icon" href="/_gate/static/logo.svg">
-<meta name="theme-color" content="#0E0A12">
-<!-- Visual effects adapted from React Bits (https://reactbits.dev, MIT, (c) David Haz):
-     Aurora (bg.js), ShinyText, StarBorder, SpotlightCard — ported to vanilla CSS/JS. -->
 <style>
-:root{--bg:#0E0A12;--card:rgba(33,25,39,.72);--popover:rgba(26,20,31,.95);--fg:#F4F1F6;--muted:#a49cab;--line:rgba(255,255,255,.09);--line2:rgba(255,255,255,.16);
- --y:#F9AB00;--o:#E8710A;--n:#F2FF59;--ok:#3ddc84;--bad:#ff6b4a;--a0:#E8710A;--a1:#F9AB00;--a2:#7B4BA8;--glow:rgba(242,255,89,.16);
- --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace}
-:root[data-theme=light]{--bg:#F8FAFC;--card:rgba(255,255,255,.94);--popover:#FFFFFF;--fg:#0F172A;--muted:#52525B;--line:rgba(15,23,42,.08);--line2:rgba(15,23,42,.14);
- --y:#D97706;--o:#C2410C;--n:#EA580C;--ok:#16a34a;--bad:#dc2626;--a0:#FED7AA;--a1:#FDE68A;--a2:#DDD6FE;--glow:rgba(217,119,6,.12)}
-:root[data-theme=light] .card{background:#FFFFFF;border-color:rgba(15,23,42,.12);box-shadow:0 12px 36px -12px rgba(15,23,42,.08),inset 0 1px 0 #FFFFFF}
-:root[data-theme=light] .menu-popover,:root[data-theme=light] .sel-popover{background:#FFFFFF;border-color:rgba(15,23,42,.14);box-shadow:0 16px 36px -8px rgba(15,23,42,.16)}
-:root[data-theme=light] .meta div{background:rgba(15,23,42,.03);border-color:rgba(15,23,42,.08)}
-:root[data-theme=light] details{background:rgba(15,23,42,.02);border-color:rgba(15,23,42,.08)}
-:root[data-theme=light] pre{color:#0F172A}
-:root[data-theme=light] .icon{background:#FFFFFF;border-color:rgba(15,23,42,.12);box-shadow:0 1px 2px rgba(15,23,42,.04)}
-:root[data-theme=light] .icon:hover{border-color:var(--y);color:var(--y);background:#FFFDF9}
-:root[data-theme=light] .star > span{background:linear-gradient(135deg,#EA580C 0%,#D97706 100%);color:#FFFFFF;font-weight:600;box-shadow:0 8px 24px -6px rgba(234,88,12,.45)}
-:root[data-theme=light] .star:hover > span{filter:brightness(1.05);box-shadow:0 12px 28px -4px rgba(234,88,12,.55)}
-:root[data-theme=light] .star[disabled] > span{background:rgba(15,23,42,.08);color:var(--muted);box-shadow:none}
-:root[data-theme=light] .ghost{border-color:rgba(15,23,42,.14);background:#FFFFFF}
-:root[data-theme=light] .ghost:hover{border-color:var(--bad);background:#FFF5F5}
-:root[data-theme=light] .sel-trigger{background:rgba(15,23,42,.03);border-color:rgba(15,23,42,.12)}
-:root[data-theme=light] .sel-trigger:hover,:root[data-theme=light] .sel-trigger:focus-visible{border-color:var(--y);background:rgba(217,119,6,.06)}
-:root[data-theme=light] h1{background-image:linear-gradient(110deg,#0F172A 30%,#D97706 55%,#0F172A 80%)}
-*{box-sizing:border-box}[hidden]{display:none!important}
-html{scroll-behavior:smooth}
-html,body{height:100%}
-:root{--header-h:60px}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 Inter,system-ui,-apple-system,"Noto Sans CJK SC","PingFang SC","Microsoft YaHei",sans-serif;
- height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
-body.app-ready{height:100vh;height:100dvh;overflow:hidden}
-#bg{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;transform:scaleY(-1)}
-.grid{position:fixed;inset:0;z-index:0;pointer-events:none;background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
- background-size:44px 44px;mask-image:radial-gradient(ellipse at 50% 45%,#000 10%,transparent 70%);-webkit-mask-image:radial-gradient(ellipse at 50% 45%,#000 10%,transparent 70%);opacity:.55}
-.site-header{position:sticky;top:0;z-index:100;min-height:var(--header-h);height:auto;padding:12px 24px;
- background:rgba(14,10,18,.75);border-bottom:1px solid var(--line);backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%);
- transition:background-color .2s,border-color .2s;box-sizing:border-box;display:flex;align-items:center;flex-shrink:0}
-:root[data-theme=light] .site-header{background:rgba(248,250,252,.88);border-bottom-color:var(--line)}
-.nav-container{max-width:1180px;width:100%;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:16px}
-.header-left{display:flex;align-items:center;gap:10px;flex-shrink:0}
-.brand{display:flex;align-items:center;gap:10px;color:var(--fg);text-decoration:none;font-weight:700;font-size:16px;letter-spacing:-.01em;white-space:nowrap;flex-shrink:0;transition:opacity .15s}
-.brand:hover{opacity:.88;color:var(--fg)}
-.brand img{width:32px;height:32px;border-radius:9px;flex-shrink:0}
-.brand-text{overflow:hidden;text-overflow:ellipsis}
-.header-left .badge{margin-left:2px}
-.header-right,.nav-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
-.icon-btn,.icon{background:var(--card);border:1px solid var(--line2);color:var(--fg);border-radius:10px;height:36px;padding:0 10px;cursor:pointer;font:600 13px var(--mono);backdrop-filter:blur(8px);display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:all .15s;text-decoration:none;box-sizing:border-box}
-.icon-btn:hover,.icon:hover{border-color:var(--y);color:var(--y);transform:translateY(-1px)}
-:root[data-theme=light] .icon-btn,:root[data-theme=light] .icon{background:#FFFFFF;border-color:rgba(15,23,42,.12);box-shadow:0 1px 2px rgba(15,23,42,.04);color:#0F172A}
-:root[data-theme=light] .icon-btn:hover,:root[data-theme=light] .icon:hover{border-color:var(--y);color:var(--y);background:#FFFDF9}
-.icon-sq{width:36px;padding:0;flex-shrink:0}
-.theme-sun,.theme-moon{width:16px;height:16px;color:var(--fg);flex-shrink:0}
-:root[data-theme=dark] .theme-sun{display:block}
-:root[data-theme=dark] .theme-moon{display:none}
-:root[data-theme=light] .theme-sun{display:none}
-:root[data-theme=light] .theme-moon{display:block}
-.github-icon{width:17px;height:17px;fill:currentColor;flex-shrink:0}
-/* Language Dropdown Menu */
-.lang-dropdown{position:relative}
-.lang-btn{font:500 13px system-ui,-apple-system,sans-serif;padding:0 10px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0;height:36px}
-.globe-icon{color:var(--muted);flex-shrink:0}
-.chevron-sm{width:12px;height:12px;color:var(--muted);transition:transform .2s;flex-shrink:0}
-.lang-open .chevron-sm{transform:rotate(180deg)}
-/* User Account & Agent Dropdown Card */
-.user-dropdown{position:relative;display:inline-flex}
-.user-btn{font:500 13px system-ui,-apple-system,sans-serif;padding:0 10px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0;height:36px}
-.user-email-text{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media (max-width:768px){.user-email-text{max-width:100px}}
-@media (max-width:480px){.user-email-text{display:none}}
-.badge-role{font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;text-transform:uppercase}
-.badge-owner{background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3)}
-.badge-member{background:rgba(156,163,175,0.15);color:#9ca3af;border:1px solid rgba(156,163,175,0.3)}
-.user-open .chevron-sm{transform:rotate(180deg)}
-.dropdown-backdrop{position:fixed;inset:0;z-index:90;background:transparent;cursor:default;-webkit-tap-highlight-color:transparent}
-.user-popover{width:420px;min-width:360px;max-width:calc(100vw - 24px);padding:16px;gap:14px;border-radius:18px}
-.user-popover-header{display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
-.user-avatar-circle{width:36px;height:36px;border-radius:50%;background:rgba(127,127,127,0.12);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.user-details{overflow:hidden;flex:1;min-width:0}
-.user-full-email{font-size:13.5px;font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3}
-.user-role-tag{font-size:11px;color:var(--muted);margin-top:2px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.user-panel-online{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font:500 11px var(--mono);color:#10b981;background:rgba(16,185,129,0.08);padding:3px 9px;border-radius:9999px;border:1px solid rgba(16,185,129,0.22);flex-shrink:0}
-.dot-online{width:6px;height:6px;border-radius:50%;background:#10b981;box-shadow:0 0 6px rgba(16,185,129,0.4)}
-.owner-ctrl-section{display:flex;flex-direction:column;gap:10px;padding-bottom:12px;border-bottom:1px solid var(--line)}
-.panel-metrics-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.panel-metric-item{background:rgba(127,127,127,0.06);border:1px solid var(--line2);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:3px}
-:root[data-theme=light] .panel-metric-item{background:rgba(0,0,0,0.03);border-color:rgba(15,23,42,0.08)}
-.panel-metric-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;font-family:var(--mono);letter-spacing:0.04em;white-space:nowrap}
-.panel-metric-val{font-size:14px;font-weight:700;color:var(--fg);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.btn-panel-stop{width:100%;height:34px;padding:0 12px;background:rgba(239,68,68,0.1);color:#f87171;border:1px solid rgba(239,68,68,0.22);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:all .15s;margin-top:2px}
-.btn-panel-stop:hover{background:rgba(239,68,68,0.22);border-color:rgba(239,68,68,0.4)}
-.btn-panel-stop.confirming{background:var(--bad);color:#fff;border-color:var(--bad);box-shadow:0 4px 16px rgba(255,107,74,.5);animation:pulse-red 1.5s infinite}
-.btn-panel-stop:disabled{opacity:0.4;cursor:not-allowed !important}
-.user-popover-section{display:flex;flex-direction:column;gap:10px}
-.section-title-row{display:flex;align-items:center;justify-content:space-between}
-.section-title{font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em}
-.refresh-tokens-btn{background:transparent;border:0;color:var(--muted);cursor:pointer;padding:3px;border-radius:5px;display:flex;align-items:center}
-.refresh-tokens-btn:hover{color:var(--fg);background:rgba(127,127,127,0.15)}
-.agent-tokens-list{display:flex;flex-direction:column;gap:8px;max-height:180px;overflow-y:auto;padding-right:2px}
-.empty-tokens{font-size:11px;color:var(--muted);text-align:center;padding:9px 12px;border:1px dashed var(--line2);border-radius:8px;background:rgba(127,127,127,0.02)}
-.token-card{background:rgba(127,127,127,0.06);border:1px solid var(--line2);border-radius:10px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px}
-.token-info{overflow:hidden;flex:1;min-width:0}
-.token-name{font-size:12.5px;font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.token-time{font-size:10.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.btn-revoke{background:rgba(239,68,68,0.08);color:#f87171;border:1px solid rgba(239,68,68,0.25);border-radius:6px;padding:3px 9px;font-size:11px;font-weight:600;cursor:pointer;flex-shrink:0;transition:all .15s}
-.btn-revoke:hover{background:#ef4444;color:#fff}
-.token-card.revoked{opacity:0.5;background:transparent}
-.token-card.revoked .btn-revoke{display:none}
-.token-revoked-label{font-size:10.5px;color:var(--muted)}
-.cli-section{display:flex;flex-direction:column;gap:6px;margin-top:4px}
-.btn-copy-ai-prompt{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:36px;background:transparent;color:var(--fg);border:1px solid var(--line2);border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:none;transition:all .18s cubic-bezier(0.16,1,0.3,1)}
-.btn-copy-ai-prompt .sparkle-icon{color:var(--y);transition:transform .2s ease;flex-shrink:0}
-.btn-copy-ai-prompt:hover{background:rgba(249,171,0,0.08);border-color:var(--y);color:var(--y);box-shadow:none}
-.btn-copy-ai-prompt:hover .sparkle-icon{transform:scale(1.18) rotate(12deg)}
-.btn-copy-ai-prompt:active{background:rgba(249,171,0,0.16);transform:scale(0.99)}
-.btn-copy-ai-prompt:disabled{opacity:0.5;cursor:not-allowed;border-color:var(--line)}
-:root[data-theme=light] .btn-copy-ai-prompt{background:rgba(0,0,0,0.02);border-color:rgba(15,23,42,0.14);color:var(--fg)}
-:root[data-theme=light] .btn-copy-ai-prompt:hover{background:rgba(217,119,6,0.08);border-color:var(--y);color:var(--y)}
-.token-prompt-btn{background:rgba(249,171,0,0.08);color:var(--y);border:1px solid rgba(249,171,0,0.25);border-radius:6px;padding:3px 9px;font-size:11px;font-weight:600;cursor:pointer;flex-shrink:0;transition:all .15s}
-.token-prompt-btn:hover{background:var(--y);color:#000}
-:root[data-theme=light] .token-prompt-btn:hover{background:var(--y);color:#fff}
-.ai-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--card);border:1px solid var(--y);color:var(--fg);padding:10px 18px;border-radius:10px;font-size:12.5px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:300;opacity:0;pointer-events:none;transition:all .25s ease}
-.ai-toast.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
-.copy-cmd-btn:hover{background:var(--y);color:#000}
-.cli-help-tip{font-size:10px;color:var(--muted);line-height:1.4;margin:0}
-.btn-create-token{background:rgba(249,171,0,0.12);color:var(--y);border:1px solid rgba(249,171,0,0.25);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600;cursor:pointer;transition:all .15s}
-.btn-create-token:hover{background:var(--y);color:#000}
-.token-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.65);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px}
-.token-modal-box{background:var(--card);border:1px solid var(--line2);border-radius:16px;width:100%;max-width:440px;padding:20px;box-shadow:0 24px 48px rgba(0,0,0,0.5);display:flex;flex-direction:column;gap:12px}
-:root[data-theme=light] .token-modal-box{background:#FFFFFF;border-color:rgba(15,23,42,0.14);box-shadow:0 24px 48px rgba(15,23,42,0.15)}
-.token-modal-head{display:flex;align-items:center;justify-content:space-between}
-.token-modal-title{font-size:14px;font-weight:700;color:var(--fg)}
-.token-modal-close{background:none;border:0;color:var(--muted);font-size:20px;cursor:pointer;padding:4px;line-height:1}
-.token-modal-close:hover{color:var(--fg)}
-.token-modal-desc{font-size:12px;color:var(--muted);line-height:1.45}
-.token-input-lbl{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:4px}
-.token-text-input{background:rgba(0,0,0,0.25);border:1px solid var(--line2);border-radius:8px;padding:8px 10px;font-size:13px;color:var(--fg);outline:none;width:100%;box-sizing:border-box}
-:root[data-theme=light] .token-text-input{background:rgba(0,0,0,0.03)}
-.token-text-input:focus{border-color:var(--y)}
-.token-modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
-.token-btn-secondary{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer}
-.token-btn-secondary:hover{color:var(--fg);border-color:var(--line)}
-.token-btn-primary{background:var(--y);color:#000;border:0;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;transition:opacity .15s}
-.token-btn-primary:hover{opacity:0.9}
-.token-alert-warn{background:rgba(249,171,0,0.12);border:1px solid rgba(249,171,0,0.25);color:var(--y);padding:8px 10px;border-radius:8px;font-size:11.5px;line-height:1.4}
-.mcp-config-box{position:relative;background:rgba(0,0,0,0.3);border:1px solid var(--line2);border-radius:8px;padding:8px}
-:root[data-theme=light] .mcp-config-box{background:rgba(0,0,0,0.03)}
-.mcp-config-box pre{font:10px/1.4 var(--mono);color:var(--fg);margin:0;padding:0;max-height:140px;overflow-y:auto;white-space:pre-wrap}
-.mcp-copy-btn{margin-top:6px;width:100%}
-.menu-popover{position:absolute;right:0;top:calc(100% + 8px);min-width:144px;background:var(--popover);border:1px solid var(--line2);border-radius:14px;padding:6px;
- backdrop-filter:blur(24px) saturate(150%);-webkit-backdrop-filter:blur(24px) saturate(150%);box-shadow:0 16px 36px -8px rgba(0,0,0,.65);z-index:70;display:none;flex-direction:column;gap:2px}
-:root[data-theme=light] .menu-popover{background:#FFFFFF;border-color:rgba(15,23,42,.14);box-shadow:0 16px 36px -8px rgba(15,23,42,.16)}
-.menu-popover.open{display:flex}
-.menu-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border-radius:8px;border:0;background:transparent;color:var(--fg);cursor:pointer;font:500 13px system-ui,-apple-system,sans-serif;width:100%;text-align:left;transition:background-color .12s}
-.menu-item:hover{background:rgba(127,127,127,.15)}
-.menu-item.active{background:rgba(249,171,0,.15);color:var(--fg);font-weight:600}
-.menu-check{width:14px;height:14px;color:var(--y);opacity:0;flex-shrink:0}
-.menu-item.active .menu-check{opacity:1}
-/* SpotlightCard */
-.card{position:relative;width:100%;max-width:440px;min-width:0;margin:auto 0;background:var(--card);border:1px solid var(--line2);border-radius:20px;padding:20px 22px 18px;
- backdrop-filter:blur(18px) saturate(140%);-webkit-backdrop-filter:blur(18px) saturate(140%);box-shadow:0 20px 60px -20px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.06);
- transition:opacity .25s,transform .25s;--mx:50%;--my:0%;flex-shrink:0}
-.card-glow{position:absolute;inset:0;border-radius:22px;overflow:hidden;pointer-events:none}
-.card-glow::before{content:"";position:absolute;inset:0;background:radial-gradient(420px circle at var(--mx) var(--my),var(--glow),transparent 60%);opacity:0;transition:opacity .4s ease}
-.card:hover .card-glow::before{opacity:.85}
-.card>*{position:relative}
-.top{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.badge{display:inline-flex;align-items:center;gap:7px;font:500 11.5px var(--mono);letter-spacing:.04em;text-transform:uppercase;height:26px;padding:0 10px;border-radius:9999px;border:1px solid var(--line2);background:rgba(127,127,127,.06)}
-.dot{width:7px;height:7px;border-radius:50%;background:var(--muted);box-shadow:0 0 0 0 currentColor}
-.waking .dot{background:var(--y);animation:pulse 1.6s infinite;color:var(--y)}.ready .dot{background:var(--ok)}.failed .dot{background:var(--bad)}
-@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(249,171,0,.6)}70%{box-shadow:0 0 0 8px rgba(249,171,0,0)}100%{box-shadow:0 0 0 0 rgba(249,171,0,0)}}
-/* Online Badge with SVG (clean, matched height & radius) */
-.viewers{display:inline-flex;align-items:center;gap:6px;font:500 11.5px var(--mono);color:var(--muted);height:26px;padding:0 10px;border-radius:9999px;background:rgba(127,127,127,.06);border:1px solid var(--line2)}
-.user-icon{width:13px;height:13px;color:var(--muted);flex-shrink:0}
-.hero{display:flex;flex-direction:column;align-items:center;text-align:center;margin:12px 0 16px}
-.hero img{width:54px;height:54px;border-radius:14px;box-shadow:0 0 32px -6px var(--o)}
-/* ShinyText */
-h1{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:10px 0 6px;background:linear-gradient(110deg,var(--fg) 35%,var(--n) 50%,var(--fg) 65%);
- background-size:250% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 4s linear infinite;min-height:28px}
-:root[data-theme=light] h1{background-image:linear-gradient(110deg,var(--fg) 35%,var(--o) 50%,var(--fg) 65%)}
-@keyframes shine{0%{background-position:100% 0}100%{background-position:-150% 0}}
-.muted{color:var(--muted)}.sub{font-size:12px;max-width:390px;min-height:18px;margin:0 auto;text-wrap:balance;word-break:break-word;overflow-wrap:anywhere;line-height:1.5}
-.stages{list-style:none;padding:0;margin:12px 0 2px;position:relative}
-.stages li{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:8px;align-items:center;padding:5px 0;color:var(--muted);font-size:12.5px}
-.stages li .k{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--line2);display:grid;place-items:center;font-size:9.5px}
-.stages li.done{color:var(--fg)}.stages li.done .k{background:var(--ok);border-color:var(--ok);color:#0E0A12}
-.stages li.cur{color:var(--fg);font-weight:600}.stages li.cur .k{border-color:var(--y);box-shadow:0 0 12px var(--y)}
-.stages li.cur .k::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--y);animation:pulse 1.6s infinite}
-.stages li .t{font:10.5px var(--mono);color:var(--muted)}
-.prog{margin:10px 0 2px}.prow{display:flex;justify-content:space-between;font:11px var(--mono);color:var(--muted);margin-bottom:4px}
-.bar{height:6px;background:rgba(127,127,127,.18);border-radius:9px;overflow:hidden;position:relative}
-.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--o),var(--y),var(--n));border-radius:9px;transition:width .4s ease;box-shadow:0 0 14px var(--y)}
-.sm{font:11px var(--mono);color:var(--muted);margin-top:4px}
-label{display:block;margin:0 0 6px;font:600 11px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
-#plabel-txt{cursor:pointer;width:fit-content;transition:color .12s}
-#plabel-txt:hover{color:var(--fg)}
-/* shadcn-ui Style Custom Select */
-.sel-backdrop{position:fixed;inset:0;z-index:55;background:transparent;cursor:default}
-.custom-select{position:relative;width:100%}
-.sel-trigger{width:100%;min-height:50px;border-radius:12px;border:1px solid var(--line2);background:rgba(127,127,127,.08);color:var(--fg);padding:8px 12px;font-size:14px;cursor:pointer;
- display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;transition:border-color .15s,background-color .15s}
-.sel-trigger:hover,.sel-trigger:focus-visible{border-color:var(--y);background:rgba(127,127,127,.12);outline:none}
-.sel-info{display:flex;flex-direction:column;gap:2px;min-width:0;overflow:hidden}
-.sel-title{font-weight:600;font-size:14px;line-height:1.35;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
-.sel-desc{font:11px var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sel-chevron{width:16px;height:16px;color:var(--muted);transition:transform .2s;flex-shrink:0}
-.sel-open .sel-chevron{transform:rotate(180deg)}
-.sel-popover{position:absolute;left:0;right:0;top:calc(100% + 6px);background:var(--popover);border:1px solid var(--line2);border-radius:14px;padding:6px;
- backdrop-filter:blur(24px) saturate(150%);-webkit-backdrop-filter:blur(24px) saturate(150%);box-shadow:0 16px 40px -10px rgba(0,0,0,.65);z-index:60;display:none;flex-direction:column;gap:2px}
-.sel-popover.open{display:flex}
-.sel-popover-head{display:flex;align-items:center;justify-content:space-between;padding:4px 8px 6px;border-bottom:1px solid var(--line);margin-bottom:4px}
-.sel-popover-title{font:600 11px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
-.sel-close-btn{background:none;border:0;color:var(--muted);cursor:pointer;width:44px;height:44px;margin:-10px -10px -10px 0;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .12s}
-.sel-close-btn:hover{color:var(--fg);background:rgba(127,127,127,.15)}
-.sel-items{display:flex;flex-direction:column;gap:2px;max-height:min(56vh,420px);overflow-y:auto;overscroll-behavior:contain}
-.sel-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;transition:background-color .12s}
-.sel-item .sel-info{flex:1;min-width:0}
-.sel-item .sel-title{-webkit-line-clamp:3;line-clamp:3}
-.sel-item:hover{background:rgba(127,127,127,.15)}
-.sel-item.active{background:rgba(249,171,0,.15);color:var(--fg)}
-.sel-item-check{width:14px;height:14px;color:var(--y);opacity:0;flex-shrink:0}
-.sel-item.active .sel-item-check{opacity:1}
-/* StarBorder button */
-.star{position:relative;display:block;width:100%;margin-top:12px;padding:1.5px;border-radius:14px;overflow:hidden;border:0;background:transparent;cursor:pointer}
-.star::before,.star::after{content:"";position:absolute;width:300%;height:50%;border-radius:50%;opacity:.8;background:radial-gradient(circle,var(--n),transparent 12%);z-index:0}
-.star::before{bottom:-12px;right:-250%;animation:sb 5s linear infinite alternate}.star::after{top:-12px;left:-250%;animation:st 5s linear infinite alternate}
-@keyframes sb{0%{transform:translate(0)}100%{transform:translate(-100%);opacity:0}}@keyframes st{0%{transform:translate(0)}100%{transform:translate(100%);opacity:0}}
-.star > span{position:relative;z-index:1;display:flex;align-items:center;justify-content:center;gap:8px;min-height:46px;border-radius:13px;font-size:15px;font-weight:700;color:#0E0A12;
- background:linear-gradient(180deg,#FBBF24 0%,#D97706 100%);box-shadow:0 8px 30px -8px rgba(217,119,6,.5);transition:transform .15s,filter .15s}
-.star:hover > span{filter:brightness(1.06)}.star:active > span{transform:scale(.985)}
-.star:disabled,.star[disabled]{cursor:not-allowed !important;pointer-events:auto !important}
-.star:disabled > span,.star[disabled] > span{background:rgba(127,127,127,.18) !important;color:var(--muted) !important;box-shadow:none !important}
-.star:disabled::before,.star[disabled]::before,.star:disabled::after,.star[disabled]::after{display:none !important}
-#wicon{display:inline-flex;align-items:center;justify-content:center;line-height:0}
-#wtext{display:inline}
-.skel-text{display:inline-block;height:12px;border-radius:4px;background:linear-gradient(90deg,rgba(127,127,127,.12) 25%,rgba(127,127,127,.24) 50%,rgba(127,127,127,.12) 75%);background-size:200% 100%;animation:shimmer 1.8s infinite}
-.btn-icon{width:18px;height:18px;flex-shrink:0}
-.spinner{animation:spin 1s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-.ghost{width:100%;min-height:42px;margin-top:8px;border-radius:13px;border:1px solid var(--line2);background:none;color:var(--fg);cursor:pointer;font-size:13.5px}
-.ghost:hover{border-color:var(--bad);color:var(--bad)}
-.ghost:disabled,.ghost.disabled{opacity:0.38;cursor:not-allowed !important;pointer-events:auto !important;color:var(--muted) !important;border-color:var(--line) !important;background:none !important}
-.ghost:disabled:hover,.ghost.disabled:hover{border-color:var(--line) !important;color:var(--muted) !important}
-.err{color:var(--bad);margin-top:8px;font-size:12.5px}.err:empty{display:none}
-.meta{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}
-.meta div{border:1px solid var(--line2);border-radius:10px;padding:7px 10px;background:rgba(127,127,127,.05);display:flex;flex-direction:column;gap:2px;text-align:left}
-.meta small{display:block;font:9.5px var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}.meta b{font:700 13px var(--mono);color:var(--fg)}
-/* shadcn Style Collapsible Console */
-details{margin-top:12px;border:1px solid var(--line2);border-radius:10px;background:rgba(0,0,0,.18);transition:border-color .15s;overflow:hidden}
-details[open]{border-color:var(--line2)}
-:root[data-theme=light] details{background:rgba(255,255,255,.5)}
-summary{cursor:pointer;min-height:34px;display:flex;align-items:center;gap:7px;padding:0 10px;font:11px var(--mono);color:var(--muted);list-style:none;user-select:none}
-summary::-webkit-details-marker{display:none}
-.con-chevron{width:13px;height:13px;transition:transform .18s;color:var(--muted)}
-details[open] .con-chevron{transform:rotate(90deg)}
-.con-title{font-weight:600;color:var(--fg);font-size:11px}
-summary .n{margin-left:auto;padding:1px 5px;border-radius:4px;background:rgba(127,127,127,.12);font-size:10px}
-pre{font:10px/1.45 var(--mono);color:var(--fg);opacity:.9;padding:6px 9px 8px;max-height:110px;overflow-x:auto;overflow-y:auto;white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;margin:0}
-/* Custom Scrollbars */
-::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:9999px}
-::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.28)}
-:root[data-theme=light] ::-webkit-scrollbar-thumb{background:rgba(15,23,42,.16)}
-:root[data-theme=light] ::-webkit-scrollbar-thumb:hover{background:rgba(15,23,42,.28)}
-*{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.16) transparent}
-:root[data-theme=light] *{scrollbar-color:rgba(15,23,42,.16) transparent}
-footer{position:relative;z-index:1;text-align:center;font:11px var(--mono);color:var(--muted);padding:0 0 14px;opacity:.7}
-.out{opacity:0;transform:scale(.98)}
-/* Skeleton loading */
-.skeleton{background:linear-gradient(90deg,rgba(127,127,127,.08) 25%,rgba(127,127,127,.18) 50%,rgba(127,127,127,.08) 75%);background-size:200% 100%;animation:shimmer 1.8s infinite;border-radius:8px}
-@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-/* Mobile: the card is fluid, so every fixed px in the type/spacing scale steps down with the viewport. */
-@media (max-width:480px){
- .chip{display:none}
- .site-header{padding:max(10px,env(safe-area-inset-top,10px)) max(14px,env(safe-area-inset-right,14px)) 10px max(14px,env(safe-area-inset-left,14px))}
- .icon{height:36px;min-width:36px}
- .icon-sq{width:36px}
- .lang-btn{padding:0 8px;width:36px;justify-content:center}.lang-btn #ltext{display:none}.lang-btn .chevron-sm{display:none}
- .gate-main{padding:6px 12px}
- .card{padding:16px 14px 12px;border-radius:18px;max-width:100%}
- h1{font-size:clamp(18px,5vw,20px);margin:6px 0 2px}
- .hero{margin:6px 0 2px}
- .hero img{width:46px;height:46px;border-radius:12px}
- .sub{font-size:11.5px;max-width:none}
- label{margin:8px 0 3px}
- .sel-trigger{min-height:42px;padding:5px 8px}
- .sel-title{font-size:12.5px}
- .star{margin-top:8px}.star > span{min-height:42px;font-size:14px}
- .meta{gap:5px;margin-top:8px}.meta div{padding:4px 6px;border-radius:8px}
- .meta small{font-size:8.5px}.meta b{font-size:12px}
- details{margin-top:8px}
- summary{min-height:30px}
- footer{padding:6px 12px max(6px,env(safe-area-inset-bottom,6px));font-size:10px}
+:root {
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-muted: #f1f5f9;
+  --fg: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-fg: #ffffff;
+  --ok: #16a34a;
+  --ok-bg: rgba(22, 163, 74, 0.1);
+  --warn: #d97706;
+  --warn-bg: rgba(217, 119, 6, 0.12);
+  --danger: #dc2626;
+  --danger-bg: rgba(220, 38, 38, 0.08);
+  --radius: 12px;
+  --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
 }
-@media (max-width:360px){
- .card{padding:12px 10px 10px;border-radius:16px}
- h1{font-size:17px}
- .hero img{width:40px;height:40px}
- .meta b{font-size:11px}.meta small{font-size:8px}
- .sel-title{font-size:12px}
+:root[data-theme="dark"] {
+  --bg: #0b0f17;
+  --surface: #111827;
+  --surface-muted: #1a2333;
+  --fg: #f1f5f9;
+  --muted: #94a3b8;
+  --border: #1f2937;
+  --border-strong: #334155;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-fg: #ffffff;
+  --ok: #22c55e;
+  --ok-bg: rgba(34, 197, 94, 0.14);
+  --warn: #f59e0b;
+  --warn-bg: rgba(245, 158, 11, 0.15);
+  --danger: #ef4444;
+  --danger-bg: rgba(239, 68, 68, 0.14);
 }
-@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
-/* ComfyUI Iframe & Gate Main Layout */
-#comfy-frame{display:none;width:100%;height:calc(100vh - var(--header-h));height:calc(100dvh - var(--header-h));border:none;background:var(--bg);flex:1}
-.gate-main{position:relative;z-index:1;flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
- padding:12px 16px;box-sizing:border-box;width:100%;overflow-y:auto}
-footer{position:relative;z-index:1;text-align:center;font:11px var(--mono);color:var(--muted);
- padding:8px 16px max(8px,env(safe-area-inset-bottom,8px));flex-shrink:0}
-@media (max-width:768px){
- #pill-stat-prof,#pill-div-2{display:none}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans); min-height: 100dvh; }
+button, input, select, textarea { font: inherit; color: inherit; }
+
+/* Header */
+.topbar {
+  position: sticky; top: 0; z-index: 40;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
 }
-@media (max-width:640px){
- .site-header{padding:max(10px,env(safe-area-inset-top,10px)) max(16px,env(safe-area-inset-right,16px)) 10px max(16px,env(safe-area-inset-left,16px))}
- .brand-text{display:none}
+.topbar-inner {
+  max-width: 1160px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
 }
-@media (max-width:420px){
- #h-badge{display:none}
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--fg); font-weight: 700; font-size: 15px; }
+.brand img { width: 28px; height: 28px; border-radius: 7px; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* 3-State Theme Switcher */
+.theme-seg {
+  display: inline-flex; background: var(--surface-muted); border: 1px solid var(--border);
+  border-radius: 9px; padding: 2px; gap: 2px;
+}
+.theme-opt {
+  min-height: 32px; padding: 0 9px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.theme-opt.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+
+.btn {
+  min-height: 40px; padding: 0 14px; border-radius: 9px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--fg); font-size: 13px; font-weight: 600;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.btn:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-muted); }
+.btn:disabled { opacity: 0.48; cursor: not-allowed; }
+.btn-sm { min-height: 34px; padding: 0 10px; font-size: 12px; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-danger { color: var(--danger); border-color: var(--border); background: var(--surface); }
+.btn-danger:hover:not(:disabled) { background: var(--danger-bg); border-color: var(--danger); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border-radius: 999px; font: 600 11.5px var(--mono); border: 1px solid var(--border); background: var(--surface-muted);
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.pill.ready { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
+.pill.ready .dot { background: var(--ok); }
+.pill.waking { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.pill.waking .dot { background: var(--warn); }
+.pill.failed { background: var(--danger-bg); color: var(--danger); border-color: transparent; }
+.pill.failed .dot { background: var(--danger); }
+
+/* Layout */
+.workspace {
+  max-width: 1160px; margin: 0 auto;
+  padding: 16px max(16px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  display: grid; grid-template-columns: 1fr; gap: 16px;
+}
+@media (min-width: 920px) {
+  .workspace { grid-template-columns: 360px minmax(0, 1fr); align-items: start; }
+}
+.stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.card-title { font-size: 14px; font-weight: 700; margin: 0; }
+.subtext { font-size: 12.5px; color: var(--muted); margin: 4px 0 0; line-height: 1.45; }
+
+/* Fields */
+.field { margin-bottom: 12px; }
+.field:last-child { margin-bottom: 0; }
+.label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
+.input, .select, .textarea {
+  width: 100%; border: 1px solid var(--border); border-radius: 9px;
+  background: var(--bg); color: var(--fg); padding: 9px 11px; font-size: 13.5px; outline: none;
+}
+.input, .select { min-height: 42px; }
+.textarea { min-height: 92px; resize: vertical; line-height: 1.45; }
+.input:focus, .select:focus, .textarea:focus { border-color: var(--accent); }
+.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 480px) {
+  .row-2 { grid-template-columns: 1fr; }
+}
+
+/* Metrics & Progress */
+.metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.metric { background: var(--surface-muted); border-radius: 9px; padding: 8px 10px; }
+.metric small { display: block; font: 600 10px var(--mono); color: var(--muted); text-transform: uppercase; }
+.metric b { display: block; font: 700 13.5px var(--mono); margin-top: 2px; }
+
+.bar { height: 6px; background: var(--surface-muted); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+.bar > i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width 0.25s ease; }
+
+details.console { margin-top: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); }
+details.console summary {
+  cursor: pointer; padding: 8px 11px; font: 600 11.5px var(--mono); color: var(--muted);
+  display: flex; align-items: center; justify-content: space-between; list-style: none;
+}
+details.console summary::-webkit-details-marker { display: none; }
+details.console pre {
+  margin: 0; padding: 8px 11px 10px; border-top: 1px solid var(--border);
+  font: 11px/1.45 var(--mono); max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+}
+
+/* Tabs */
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--surface-muted); padding: 3px; border-radius: 9px; margin-bottom: 14px; }
+.tab { min-height: 36px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.tab.active { background: var(--surface); color: var(--fg); }
+
+/* Gallery */
+.jobs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+.job-card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg); display: flex; flex-direction: column; }
+.job-thumb { aspect-ratio: 1 / 1; background: var(--surface-muted); display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+.job-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.job-meta { padding: 10px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+.job-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-sub { font: 11px var(--mono); color: var(--muted); display: flex; justify-content: space-between; gap: 6px; }
+.empty-box { padding: 28px 16px; text-align: center; color: var(--muted); font-size: 13px; border: 1px dashed var(--border); border-radius: 10px; }
+.err-banner { margin-top: 10px; padding: 9px 11px; border-radius: 8px; background: var(--danger-bg); color: var(--danger); font-size: 12.5px; }
+
+/* Modal */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.modal {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  width: 100%; max-width: 480px; max-height: 90dvh; overflow-y: auto; padding: 18px;
+}
+.token-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; margin-bottom: 8px;
+}
+.code-line {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  font: 12px var(--mono); word-break: break-all;
+}
+.toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 100;
+  background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
 }
 </style>
 </head>
 <body>
-<canvas id="bg" aria-hidden="true"></canvas><div class="grid" aria-hidden="true"></div>
-<div id="dropdown-backdrop" class="dropdown-backdrop" style="display:none"></div>
-<header class="site-header">
-  <div class="nav-container">
-    <div class="header-left">
-      <a class="brand" href="/" aria-label="Comfy Colab Kit Home">
-        <img src="/_gate/static/logo.svg" alt="" width="32" height="32">
-        <span class="brand-text">Comfy Colab Kit</span>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0">
+      <a class="brand" href="/">
+        <img src="/_gate/static/logo.svg" alt="">
+        <span>Comfy Colab Kit</span>
       </a>
-      <span class="badge" id="h-badge" style="display:none"><span class="dot"></span><span id="h-btext">…</span></span>
+      <span class="pill" id="state-pill"><span class="dot"></span><span id="state-text">休眠中</span></span>
     </div>
-
-    <div class="header-right">
-      <!-- User Account & Agent Card (Immediately left of Language Selector) -->
-      <div class="user-dropdown" id="user-dropdown" style="display:none">
-        <button type="button" class="icon-btn user-btn" id="user-btn" aria-haspopup="dialog" aria-expanded="false" title="账户与 Agent 授权">
-          <svg class="user-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
-          </svg>
-          <span id="user-email-text" class="user-email-text"></span>
-          <span id="user-role-badge" class="badge-role"></span>
-          <svg class="chevron-sm" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-        </button>
-
-        <div class="menu-popover user-popover" id="user-popover" role="dialog">
-          <div class="user-popover-header">
-            <div class="user-avatar-circle" id="user-avatar-circle">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
-              </svg>
-            </div>
-            <div class="user-details">
-              <div class="user-full-email" id="user-full-email"></div>
-              <div class="user-role-tag" id="user-role-tag"></div>
-            </div>
-            <div class="user-panel-online" id="panel-vcount-badge" title="当前在线人数">
-              <span class="dot-online"></span>
-              <span id="panel-vcount">1 online</span>
-            </div>
-          </div>
-
-          <!-- Owner Only Session & CU Management Section -->
-          <div class="user-popover-section owner-ctrl-section" id="owner-ctrl-section" style="display:none">
-            <div class="section-title-row">
-              <span class="section-title" id="owner-sec-title">算力指标与控制</span>
-              <span class="badge-role badge-owner">Owner</span>
-            </div>
-            <div class="panel-metrics-grid">
-              <div class="panel-metric-item">
-                <span class="panel-metric-lbl" id="panel-lbl-today">今日 CU</span>
-                <span class="panel-metric-val" id="panel-cu-today">0.00</span>
-              </div>
-              <div class="panel-metric-item">
-                <span class="panel-metric-lbl" id="panel-lbl-month">本月 CU</span>
-                <span class="panel-metric-val" id="panel-cu-month">0.0</span>
-              </div>
-              <div class="panel-metric-item">
-                <span class="panel-metric-lbl" id="panel-lbl-balance">CU 余额</span>
-                <span class="panel-metric-val" id="panel-cu-balance">—</span>
-              </div>
-            </div>
-            <button type="button" class="btn-panel-stop" id="panel-stop-btn">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
-              </svg>
-              <span id="panel-stop-txt">关机 · 释放 GPU</span>
-            </button>
-          </div>
-
-          <div class="user-popover-section">
-            <div class="section-title-row">
-              <span class="section-title">已绑定的 AI Agent</span>
-              <div style="display:flex;align-items:center;gap:6px">
-                <button type="button" class="btn-create-token" id="create-token-btn" title="生成新的 Agent Token">+ 新建</button>
-                <button type="button" class="refresh-tokens-btn" id="refresh-tokens-btn" title="刷新列表">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
-                </button>
-              </div>
-            </div>
-            <div id="agent-tokens-list" class="agent-tokens-list">
-              <div class="empty-tokens">正在加载...</div>
-            </div>
-          </div>
-
-          <div class="cli-section">
-            <button type="button" class="btn-copy-ai-prompt" id="copy-ai-prompt-btn" title="一键复制专为 Cursor、Claude Code、OpenClaw 设计的完整接入指令">
-              <svg class="sparkle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1 1.3-1.3Z"/>
-              </svg>
-              <span id="copy-ai-prompt-txt">复制 AI Agent 接入指令</span>
-            </button>
-          </div>
-        </div>
+    <div class="topbar-actions">
+      <div class="theme-seg" role="group" aria-label="主题模式">
+        <button type="button" class="theme-opt" data-theme-opt="auto" title="跟随系统">系统</button>
+        <button type="button" class="theme-opt" data-theme-opt="light" title="浅色模式">浅色</button>
+        <button type="button" class="theme-opt" data-theme-opt="dark" title="深色模式">深色</button>
       </div>
-
-      <div class="lang-dropdown" id="lang-dropdown">
-        <button type="button" class="icon-btn lang-btn" id="lang-btn" aria-haspopup="menu" aria-expanded="false" title="Language">
-          <svg class="globe-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>
-          </svg>
-          <span id="ltext">简体中文</span>
-          <svg class="chevron-sm" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-        </button>
-        <div class="menu-popover" id="lang-popover" role="menu">
-          <button type="button" class="menu-item" role="menuitem" id="opt-lang-zh">
-            <span>简体中文</span>
-            <svg class="menu-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-          </button>
-          <button type="button" class="menu-item" role="menuitem" id="opt-lang-en">
-            <span>English</span>
-            <svg class="menu-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-          </button>
-        </div>
-      </div>
-
-      <button class="icon-btn icon-sq" id="theme" aria-label="Toggle theme" title="Toggle theme">
-        <svg class="theme-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
-        </svg>
-        <svg class="theme-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
-        </svg>
-      </button>
-
-      <a class="icon-btn icon-sq" id="github-link" href="https://github.com/FireTable/comfy-colab-kit" target="_blank" rel="noopener noreferrer" title="GitHub Repository" aria-label="GitHub Repository">
-        <svg class="github-icon" width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
-          <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
-        </svg>
-      </a>
+      <button type="button" class="btn btn-sm" id="account-btn">账户与令牌</button>
     </div>
   </div>
 </header>
-<main class="gate-main" id="gate-main">
-<section class="card" id="card" aria-live="polite">
-  <div class="card-glow"></div>
-  <div class="top">
-    <span class="badge" id="badge"><span class="dot"></span><span id="btext">…</span></span>
-    <span class="viewers" id="card-viewers">
-      <svg class="user-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-      <span id="card-vcount">1 online</span>
-    </span>
-  </div>
-  <div class="hero"><img src="/_gate/static/logo.svg" alt=""><h1 id="title">ComfyUI is sleeping</h1><div class="muted sub" id="sub"></div></div>
-  <ol class="stages" id="stages" hidden></ol>
-  <div class="prog" id="prog" hidden><div class="prow"><span id="plabel">Overall</span><span id="eta"></span></div><div class="bar"><i id="pbar"></i></div><div class="sm" id="pdl"></div></div>
-  <div id="pick">
-    <label for="prof-trigger" id="plabel-txt">Profile</label>
-    <div class="custom-select" id="custom-select">
-      <button type="button" class="sel-trigger" id="prof-trigger" aria-haspopup="listbox" aria-expanded="false">
-        <div class="sel-info">
-          <span class="sel-title" id="sel-title"><span class="skel-text" style="width:110px"></span></span>
-          <span class="sel-desc" id="sel-desc"><span class="skel-text" style="width:160px;height:11px;margin-top:4px"></span></span>
-        </div>
-        <svg class="sel-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-      </button>
-      <div class="sel-backdrop" id="sel-backdrop" style="display:none"></div>
-      <div class="sel-popover" id="prof-popover" role="listbox">
-        <div class="sel-popover-head">
-          <span class="sel-popover-title" id="pop-title">Profile</span>
-          <button type="button" class="sel-close-btn" id="pop-close" aria-label="Close">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
-          </button>
-        </div>
-        <div class="sel-items" id="prof-items"></div>
+
+<main class="workspace">
+  <!-- Left Column: Colab GPU Session & Lifecycle -->
+  <div class="stack">
+    <section class="card" aria-label="GPU 实例控制">
+      <div class="card-head">
+        <h2 class="card-title">Colab L4 批处理算力</h2>
+        <span style="font:11.5px var(--mono);color:var(--muted)" id="idle-timer-label">未分配</span>
       </div>
-      <select id="profile" hidden></select>
-    </div>
+      <p class="subtext" id="state-desc">纯离线无头批处理模式，无外网穿透隧道，空闲 10 分钟自动释放算力。</p>
+
+      <div id="boot-prog-wrap" hidden style="margin-top:12px">
+        <div style="display:flex;justify-content:space-between;font:11.5px var(--mono);color:var(--muted)">
+          <span id="boot-stage-txt">准备中…</span>
+          <span id="boot-pct-txt">0%</span>
+        </div>
+        <div class="bar"><i id="boot-bar"></i></div>
+      </div>
+
+      <div class="field" style="margin-top:12px" id="profile-field">
+        <label class="label" for="profile-select">模型预设 (Profile)</label>
+        <select class="select" id="profile-select"></select>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button type="button" class="btn btn-primary" style="flex:1;min-width:120px" id="wake-btn">唤醒 GPU</button>
+        <button type="button" class="btn" id="extend-btn" hidden>延时</button>
+        <button type="button" class="btn btn-danger" id="stop-btn" hidden>释放关机</button>
+      </div>
+
+      <div id="session-err" class="err-banner" hidden></div>
+
+      <div class="metrics" id="cu-metrics" hidden>
+        <div class="metric"><small>今日 CU</small><b id="cu-today">0.00</b></div>
+        <div class="metric"><small>本月 CU</small><b id="cu-month">0.0</b></div>
+        <div class="metric"><small>可用余额</small><b id="cu-balance">—</b></div>
+      </div>
+
+      <details class="console" id="console-box">
+        <summary>
+          <span>运行日志</span>
+          <span id="log-count">0 行</span>
+        </summary>
+        <pre id="log-pre"></pre>
+      </details>
+    </section>
   </div>
-  <button class="star" id="wake">
-    <span>
-      <span id="wicon">
-        <svg class="btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-      </span>
-      <span id="wtext">Wake</span>
-    </span>
-  </button>
-  <button class="ghost" id="stop" hidden>Stop · release GPU</button>
-  <div class="err" id="err" role="alert"></div>
-  <div class="meta" id="meta">
-    <div><small><span class="skel-text" style="width:40px;height:9px"></span></small><b><span class="skel-text" style="width:36px;height:14px;margin-top:4px"></span></b></div>
-    <div><small><span class="skel-text" style="width:40px;height:9px"></span></small><b><span class="skel-text" style="width:36px;height:14px;margin-top:4px"></span></b></div>
-    <div><small><span class="skel-text" style="width:40px;height:9px"></span></small><b><span class="skel-text" style="width:46px;height:14px;margin-top:4px"></span></b></div>
+
+  <!-- Right Column: Batch Submission & Output Gallery -->
+  <div class="stack">
+    <section class="card" aria-label="提交批处理任务">
+      <div class="card-head">
+        <h2 class="card-title">无头批处理出图</h2>
+        <span style="font:11.5px var(--mono);color:var(--muted)" id="queue-badge">队列空闲</span>
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab active" id="tab-quick" role="tab" aria-selected="true">快速文生图 / 图生图</button>
+        <button type="button" class="tab" id="tab-raw" role="tab" aria-selected="false">API 工作流 JSON</button>
+      </div>
+
+      <!-- Quick Studio Form -->
+      <form id="quick-form">
+        <div class="field">
+          <label class="label" for="prompt-input">正向提示词 (Prompt)</label>
+          <textarea class="textarea" id="prompt-input" placeholder="描述想要生成的画面内容…" required></textarea>
+        </div>
+        <div class="row-2 field">
+          <div>
+            <label class="label" for="preset-select">采样预设</label>
+            <select class="select" id="preset-select"></select>
+          </div>
+          <div>
+            <label class="label" for="size-select">输出尺寸</label>
+            <select class="select" id="size-select">
+              <option value="1024x1024">1024 × 1024 (1:1)</option>
+              <option value="1024x768">1024 × 768 (4:3 横图)</option>
+              <option value="768x1024">768 × 1024 (3:4 竖图)</option>
+              <option value="1280x720">1280 × 720 (16:9)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row-2 field">
+          <div>
+            <label class="label" for="seed-input">随机种子 (-1 为随机)</label>
+            <input type="number" class="input" id="seed-input" value="-1">
+          </div>
+          <div>
+            <label class="label" for="ref-file">参考底图 (可选 · 图生图)</label>
+            <input type="file" class="input" id="ref-file" accept=".png,.jpg,.jpeg,.webp" style="padding:7px 9px">
+          </div>
+        </div>
+        <div class="field" id="denoise-wrap" hidden>
+          <label class="label" for="denoise-input">重绘幅度 (Denoise: <span id="denoise-val">0.65</span>)</label>
+          <input type="range" id="denoise-input" min="0.1" max="1.0" step="0.05" value="0.65" style="width:100%">
+        </div>
+        <details style="margin-bottom:12px">
+          <summary style="cursor:pointer;font-size:12px;color:var(--muted)">高级选项（负面提示词）</summary>
+          <div class="field" style="margin-top:8px">
+            <input type="text" class="input" id="neg-input" value="worst quality, bad anatomy, watermark, jpeg artifact">
+          </div>
+        </details>
+        <button type="submit" class="btn btn-primary" style="width:100%;min-height:44px" id="submit-quick-btn">生成图片</button>
+      </form>
+
+      <!-- Raw API Workflow Form -->
+      <form id="raw-form" hidden>
+        <div class="field">
+          <label class="label" for="raw-json-input">ComfyUI API 格式 JSON</label>
+          <textarea class="textarea" id="raw-json-input" style="min-height:160px;font-family:var(--mono);font-size:12px" placeholder='{"1": {"class_type": "...", "inputs": {...}}}'></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;min-height:44px" id="submit-raw-btn">提交 API 工作流</button>
+      </form>
+
+      <div id="job-err" class="err-banner" hidden></div>
+    </section>
+
+    <section class="card" aria-label="生成结果画廊">
+      <div class="card-head">
+        <h2 class="card-title">近期批处理任务与产物</h2>
+        <button type="button" class="btn btn-sm" id="refresh-jobs-btn">刷新</button>
+      </div>
+      <div id="jobs-container">
+        <div class="empty-box">暂无任务记录。提交提示词后，云端渲染完成的图片会自动拉回此处。</div>
+      </div>
+    </section>
   </div>
-  <details id="logs" open>
-    <summary>
-      <svg class="con-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-      <span class="con-title" id="con-title">Console</span>
-      <span class="n" id="lcount">0 lines</span>
-    </summary>
-    <pre id="log"></pre>
-  </details>
-</section>
 </main>
-<footer id="footer-txt">shared session · GPU sleeps when idle</footer>
 
-<!-- Agent Token Modal -->
-<div id="token-modal" class="token-modal-backdrop" style="display:none">
-  <div class="token-modal-box">
-    <div class="token-modal-head">
-      <span class="token-modal-title" id="token-modal-title">生成 AI Agent 访问凭证</span>
-      <button type="button" class="token-modal-close" id="token-modal-close" aria-label="关闭">&times;</button>
+<!-- Account & One-Time Agent Token Modal -->
+<div class="modal-backdrop" id="account-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="card-head">
+      <h2 class="card-title" id="modal-title">账户与 AI Agent 令牌管理</h2>
+      <button type="button" class="btn btn-sm" id="close-modal-btn">关闭</button>
+    </div>
+    <p class="subtext" id="modal-user-info">—</p>
+
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">
+        <span class="label" style="margin:0">签发新单次令牌 (仅存 SHA-256 哈希)</span>
+      </div>
+      <div style="display:flex;gap:8px">
+        <input type="text" class="input" id="new-token-name" placeholder="备注名称，如 Hermes / Cursor" maxlength="40">
+        <button type="button" class="btn btn-primary" id="mint-token-btn" style="flex-shrink:0">生成令牌</button>
+      </div>
+
+      <div id="minted-box" hidden style="margin-top:12px;padding:12px;border-radius:10px;background:var(--warn-bg)">
+        <div style="font-size:12px;font-weight:600;color:var(--warn);margin-bottom:6px">此明文密钥仅展示一次，网关数据库不保存明文，请立即复制保存：</div>
+        <div class="code-line">
+          <span id="minted-token-text">sk_agent_...</span>
+          <button type="button" class="btn btn-sm" id="copy-minted-btn">复制</button>
+        </div>
+      </div>
     </div>
 
-    <!-- Step 1: Input Name -->
-    <div id="token-step-input">
-      <p class="token-modal-desc" id="token-modal-desc">为你的 AI 编程助手（如 Cursor、Claude Desktop、Cline 等）创建专属访问凭证与 MCP 配置。</p>
-      <label class="token-input-lbl" for="token-name-input" id="token-input-lbl" style="margin-top:10px">客户端备注名</label>
-      <input type="text" id="token-name-input" class="token-text-input" placeholder="例如: Cursor-MacBook" maxlength="40" autocomplete="off" />
-      <div class="token-modal-actions">
-        <button type="button" class="token-btn-secondary" id="token-cancel-btn">取消</button>
-        <button type="button" class="token-btn-primary" id="token-confirm-btn">确认生成</button>
-      </div>
-    </div>
-
-    <!-- Step 2: Show Result -->
-    <div id="token-step-result" style="display:none">
-      <div class="token-alert-warn" id="token-alert-warn">此 Token 仅展示一次，关闭后将无法再次查看完整密钥，请妥善保存。</div>
-      
-      <label class="token-input-lbl" style="margin-top:10px">Agent Bearer Token</label>
-      <div class="cli-cmd-box" style="margin-bottom:12px">
-        <code id="new-token-val">sk_agent_...</code>
-        <button type="button" class="copy-cmd-btn" id="copy-token-val-btn">复制</button>
-      </div>
-
-      <label class="token-input-lbl">MCP 服务配置 (Claude Desktop / Cursor)</label>
-      <div class="mcp-config-box">
-        <pre id="mcp-config-json">...</pre>
-        <button type="button" class="copy-cmd-btn mcp-copy-btn" id="copy-mcp-json-btn">复制 MCP 配置</button>
-      </div>
-
-      <button type="button" class="btn-copy-ai-prompt" id="copy-ai-prompt-modal-btn" style="margin-top:10px">
-        <svg class="sparkle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>
-        </svg>
-        <span id="copy-modal-prompt-txt">复制完整 AI Agent 提示词</span>
-      </button>
-
-      <div class="token-modal-actions" style="margin-top:12px">
-        <button type="button" class="token-btn-primary" id="token-done-btn" style="width:100%">完成</button>
-      </div>
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <span class="label">已授权令牌列表</span>
+      <div id="tokens-list"><div class="subtext">加载中…</div></div>
     </div>
   </div>
 </div>
 
-<iframe id="comfy-frame" title="ComfyUI" allow="clipboard-read; clipboard-write" style="display:none"></iframe>
-<script src="/_gate/static/bg.js" defer></script>
+<div class="toast" id="toast" hidden></div>
+
 <script>
-const $=id=>document.getElementById(id);
-const I18N={
- en:{
-  title:"Comfy Colab Kit",
-  sleeping_title:"ComfyUI is sleeping",
-  sleeping_sub:"GPU released — no compute units in use. Wake it to start a shared session.",
-  sleeping_last_stop:"Last stop: {reason}. GPU released — no compute units in use.",
-  waking_title:"Waking up…",
-  ready_title:"Ready — opening ComfyUI",
-  ready_sub:"Redirecting to App mode…",
-  failed_title:"Start failed",
-  stopping_title:"Releasing GPU…",
-  switching_title:"Switching profile…",
-  elapsed:"Elapsed {time}",
-  badge_sleeping:"Sleeping",badge_ready:"Ready",badge_failed:"Failed",badge_stopping:"Stopping",badge_switching:"Switching",badge_waking:"Waking",
-  online:"{count} online",
-  stage_allocating:"Allocate GPU",stage_installing:"Install runtime",stage_downloading:"Download models",stage_booting:"Start ComfyUI",stage_smoke_testing:"Smoke test",
-  overall:"Overall",eta:"ETA ~{time}",paused:"paused (prompt running)",stalled_restarted:"{count} download retry",stalled_restarted_p:"{count} download retries",later:"+{size} later",
-  info_allocating:"Allocating Colab GPU instance…",info_installing:"Setting up runtime & Python dependencies…",info_booting:"Starting ComfyUI engine & loading models…",info_smoke:"Running smoke test generation…",
-  profile_label:"Profile",
-  select_profile:"Select Profile",
-  wake_btn:"Wake",retry_btn:"Retry",starting_btn:"Starting…",
-  wake_disabled_hint:"Only owners can wake the GPU",
-  stop_btn:"Stop · release GPU",stop_confirm:"Stop and release the GPU?",
-  header_stop:"Stop",header_stop_title:"Stop · release GPU",
-  stop_disabled_hint:"Only the session initiator or owner can stop the session",
-  dock_confirm:"Confirm stop?",dock_stopping:"Stopping…",
-  console_title:"Console",lines:"{count} lines",
-  cu_today:"CU TODAY",cu_month:"MONTH",cu_balance:"BALANCE",
-  footer:"shared session · GPU sleeps when idle",
-  workflows_count:"{count} workflows",reconnecting:"Reconnecting…"
- },
- zh:{
-  title:"Comfy Colab Kit",
-  sleeping_title:"ComfyUI 休眠中",
-  sleeping_sub:"GPU 已释放，当前无算力消耗。点击唤醒开始共享会话。",
-  sleeping_last_stop:"上次停机：{reason}。GPU 已释放，无算力消耗。",
-  waking_title:"正在唤醒…",
-  ready_title:"已就绪 — 正在打开 ComfyUI",
-  ready_sub:"正在跳转至 App 模式…",
-  failed_title:"启动失败",
-  stopping_title:"正在释放 GPU…",
-  switching_title:"正在切换预设…",
-  elapsed:"已运行 {time}",
-  badge_sleeping:"休眠中",badge_ready:"就绪",badge_failed:"失败",badge_stopping:"正在停机",badge_switching:"正在切换",badge_waking:"唤醒中",
-  online:"{count} 人在线",
-  stage_allocating:"分配 GPU 算力",stage_installing:"安装运行时与依赖",stage_downloading:"下载核心模型",stage_booting:"启动 ComfyUI",stage_smoke_testing:"冒烟出图验证",
-  overall:"总体进度",eta:"预计剩余 ~{time}",paused:"已暂停 (正在出图)",stalled_restarted:"网络重试中 ({count}次)",stalled_restarted_p:"网络重试中 ({count}次)",later:"另有 +{size} 后续拉取",
-  info_allocating:"正在分配 Colab GPU 算力实例…",info_installing:"正在安装 ComfyUI 运行环境与核心依赖…",info_booting:"正在启动 ComfyUI 引擎与载入模型组件…",info_smoke:"正在执行冒烟出图验证…",
-  profile_label:"运行预设 (Profile)",
-  select_profile:"选择运行预设",
-  wake_btn:"唤醒",retry_btn:"重试",starting_btn:"启动中…",
-  wake_disabled_hint:"仅管理员可开机唤醒 GPU",
-  stop_btn:"关机 · 释放 GPU",stop_confirm:"确定要停机并释放 GPU 吗？",
-  header_stop:"关机",header_stop_title:"关机 · 释放 GPU",
-  stop_disabled_hint:"仅开机者或管理员可关机释放 GPU",
-  dock_confirm:"确认关机?",dock_stopping:"停机中…",
-  console_title:"控制台日志",lines:"{count} 行",
-  cu_today:"今日 CU",cu_month:"本月 CU",cu_balance:"CU 余额",
-  footer:"全局共享会话 · 空闲自动休眠释放算力",
-  workflows_count:"{count} 个工作流",reconnecting:"正在重新连接…"
- }
-};
+const $ = id => document.getElementById(id);
 
-let lang=new URLSearchParams(location.search).get("lang")||localStorage.getItem("kit.lang")||(navigator.language.startsWith("zh")?"zh":"en");
-function t(k,p={}){let s=(I18N[lang]&&I18N[lang][k])||I18N.en[k]||k;for(const[x,v] of Object.entries(p))s=s.replace(`{${x}}`,v);return s}
-
-const STAGES_KEYS=[["allocating","stage_allocating",20],["installing","stage_installing",60],["downloading","stage_downloading",0],["booting","stage_booting",40],["smoke_testing","stage_smoke_testing",15]];
-const BOOT=STAGES_KEYS.map(s=>s[0]);
-
-let cid=sessionStorage.getItem("kit.client_id");
-if(!cid){cid=Math.random().toString(36).slice(2)+Date.now().toString(36);sessionStorage.setItem("kit.client_id",cid)}
-
-let S=null,profiles=[],lines=0,stageT={},lastSt=null,selectedProfileId="";
-
-// Initial SSR-like data injection if present
-if(window.__INIT__){
- S=window.__INIT__.status;
- if(window.__INIT__.profiles&&window.__INIT__.profiles.profiles){
-  profiles=window.__INIT__.profiles.profiles;
-  selectedProfileId=S.profile||window.__INIT__.profiles.default||(profiles[0]&&profiles[0].id)||"";
- }
- if(window.__INIT__.logs&&Array.isArray(window.__INIT__.logs)&&window.__INIT__.logs.length){
-  const p=$("log");
-  p.textContent=window.__INIT__.logs.join("\n")+"\n";
-  lines=window.__INIT__.logs.length;
-  $("lcount").textContent=t("lines",{count:lines});
-  p.scrollTop=p.scrollHeight;
- }
-}
-
-const root=document.documentElement;
-window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change",(e)=>{
- if(!localStorage.getItem("kit.theme")){
-  root.dataset.theme=e.matches?"dark":"light";
-  window.kitBg&&kitBg.set({});
- }
-});
-$("theme").onclick=()=>{const n=root.dataset.theme==="dark"?"light":"dark";root.dataset.theme=n;localStorage.setItem("kit.theme",n);window.kitBg&&kitBg.set({})};
-
-// Unified Menu State & Backdrop Management
-let langOpen=false,userOpen=false,selectOpen=false;
-const dropdownBackdrop=$("dropdown-backdrop");
-
-function updateMenuBackdrop(){
- const anyHeaderOpen=langOpen||userOpen;
- if(dropdownBackdrop)dropdownBackdrop.style.display=anyHeaderOpen?"block":"none";
- const f=$("comfy-frame");
- if(f)f.style.pointerEvents=anyHeaderOpen?"none":"";
-}
-function closeAllMenus(){
- if(selectOpen)toggleSelect(false);
- if(langOpen)toggleLangMenu(false);
- if(userOpen)toggleUserMenu(false);
-}
-if(dropdownBackdrop){
- dropdownBackdrop.addEventListener("pointerdown",e=>{
-  e.preventDefault();
-  toggleLangMenu(false);
-  toggleUserMenu(false);
- });
-}
-
-// Language Dropdown Menu Implementation
-const langBtn=$("lang-btn"),langPopover=$("lang-popover"),langDropdown=$("lang-dropdown");
-function toggleLangMenu(force){
- langOpen=force!==undefined?force:!langOpen;
- if(langOpen){
-  if(selectOpen)toggleSelect(false);
-  if(userOpen)toggleUserMenu(false);
- }
- langPopover.classList.toggle("open",langOpen);
- langDropdown.classList.toggle("lang-open",langOpen);
- langBtn.setAttribute("aria-expanded",langOpen);
- updateMenuBackdrop();
-}
-function setLanguage(l){
- lang=l;
- localStorage.setItem("kit.lang",lang);
- updateLanguageUI();
- render();
- renderCustomSelect();
-}
-function updateLanguageUI(){
- $("ltext").textContent=lang==="zh"?"简体中文":"English";
- $("opt-lang-zh").classList.toggle("active",lang==="zh");
- $("opt-lang-en").classList.toggle("active",lang==="en");
- if($("copy-ai-prompt-txt"))$("copy-ai-prompt-txt").textContent=lang==="zh"?"复制 AI Agent 接入指令":"Copy Prompt for AI Agent";
- if($("copy-modal-prompt-txt"))$("copy-modal-prompt-txt").textContent=lang==="zh"?"复制完整 AI Agent 提示词":"Copy Complete AI Prompt";
- if($("copy-cmd-btn"))$("copy-cmd-btn").textContent=lang==="zh"?"复制命令":"Copy";
- if($("cli-help-tip"))$("cli-help-tip").textContent=lang==="zh"?"复制指令给 Cursor / Claude Code，或终端运行命令一键配对":"Copy prompt to Cursor / Claude, or run CLI command to pair in 1 click";
-}
-langBtn.onclick=(e)=>{e.stopPropagation();toggleLangMenu()};
-$("opt-lang-zh").onclick=(e)=>{e.stopPropagation();setLanguage("zh");toggleLangMenu(false)};
-$("opt-lang-en").onclick=(e)=>{e.stopPropagation();setLanguage("en");toggleLangMenu(false)};
-updateLanguageUI();
-
-// User Account & Connected Agents Popover Implementation
-const userBtn=$("user-btn"),userPopover=$("user-popover"),userDropdown=$("user-dropdown");
-let currentUser=null;
-function toggleUserMenu(force){
- userOpen=force!==undefined?force:!userOpen;
- if(userOpen){
-  if(langOpen)toggleLangMenu(false);
-  if(selectOpen)toggleSelect(false);
-  loadAgentTokens();
- }
- userPopover.classList.toggle("open",userOpen);
- userDropdown.classList.toggle("user-open",userOpen);
- userBtn.setAttribute("aria-expanded",userOpen);
- updateMenuBackdrop();
-}
-function updateUserUI(you){
- if(!you||!you.email)return;
- currentUser=you;
- userDropdown.style.display="inline-flex";
- $("user-email-text").textContent=you.email;
- $("user-full-email").textContent=you.email;
- const isOwner=!!you.owner;
- const roleBadge=$("user-role-badge");
- roleBadge.textContent=isOwner?"Owner":"Member";
- roleBadge.className="badge-role "+(isOwner?"badge-owner":"badge-member");
- $("user-role-tag").textContent=isOwner?(lang==="zh"?"系统管理员 (具备全部权限)":"Admin (Full Access)"):(lang==="zh"?"协作者 (查询与绘图)":"Member (Query & Generate)");
- if($("cli-auth-cmd"))$("cli-auth-cmd").textContent=`ckit auth ${window.location.origin}`;
-}
-userBtn.onclick=(e)=>{e.stopPropagation();toggleUserMenu()};
-$("refresh-tokens-btn").onclick=(e)=>{e.stopPropagation();loadAgentTokens()};
-
-// Agent Token Creation Modal Handlers
-const tokenModal=$("token-modal");
-const tokenStepInput=$("token-step-input");
-const tokenStepResult=$("token-step-result");
-const tokenNameInput=$("token-name-input");
-const tokenConfirmBtn=$("token-confirm-btn");
-const tokenCancelBtn=$("token-cancel-btn");
-const tokenModalClose=$("token-modal-close");
-const tokenDoneBtn=$("token-done-btn");
-
-function openTokenModal(){
- tokenStepInput.style.display="block";
- tokenStepResult.style.display="none";
- tokenNameInput.value="";
- tokenModal.style.display="flex";
- tokenNameInput.focus();
-}
-function closeTokenModal(){
- tokenModal.style.display="none";
-}
-$("create-token-btn").onclick=(e)=>{
- e.stopPropagation();
- openTokenModal();
-};
-tokenModalClose.onclick=closeTokenModal;
-tokenCancelBtn.onclick=closeTokenModal;
-tokenModal.onclick=(e)=>{if(e.target===tokenModal)closeTokenModal()};
-
-let latestAgentToken=null;
-
-function showToast(msg){
- let toast=$("ai-toast");
- if(!toast){
-  toast=document.createElement("div");
-  toast.id="ai-toast";
-  toast.className="ai-toast";
-  document.body.appendChild(toast);
- }
- toast.textContent=msg;
- toast.classList.add("show");
- clearTimeout(window.__toastTimer);
- window.__toastTimer=setTimeout(()=>{toast.classList.remove("show")},3500);
-}
-
-function generateAIPrompt(token,clientName){
- const origin=window.location.origin;
- const isZh=lang==="zh";
- return `# 接入 Comfy Colab Kit GPU 绘图网关 (Comfy Colab Kit Agent Access)
-
-你好！用户已向你授权使用其私有 Google Colab L4 GPU ComfyUI 绘图网关。
-本网关由 Comfy Colab Kit (https://github.com/FireTable/comfy-colab-kit) 驱动，内置经过抗条纹 (DeBand) 优化的高清 MOSS-Image 生产管线。
-
----
-
-## 1. 核心凭证与网关地址 (Connection Info)
-- **网关地址 (Gateway URL)**: \`${origin}\`
-- **预授权令牌 (Bearer Token)**: \`${token || "(可直接通过下文 Device Flow 授权获取)"}\`
-  *(当前已在浏览器完成授权，具备完整的会话查询、模型管理与绘图权限)*
-
-所有 HTTP 接口均使用**相对路径**描述，由 Agent 拼接在网关 Base URL 之后，请求头附带：
-\`Authorization: Bearer ${token}\`
-
----
-
-## 2. 获取与安装 ckit CLI 工具 (Install ckit)
-
-\`ckit\` 是专为 Agent 和工程师打造的轻量命令行工具与 MCP 服务器，**基于 Python 3 标准库，无任何第三方 pip 运行时依赖**。
-
-### 安装方式 (任选其一)
-- **通过 pip 安装 (推荐)**:
-\`\`\`bash
-pip install "git+https://github.com/FireTable/comfy-colab-kit.git"
-\`\`\`
-- **通过 uv 工具安装**:
-\`\`\`bash
-uv tool install "git+https://github.com/FireTable/comfy-colab-kit.git"
-\`\`\`
-- **单脚本免安装运行**:
-\`\`\`bash
-mkdir -p ~/.local/bin
-curl -sSL "https://raw.githubusercontent.com/FireTable/comfy-colab-kit/main/packages/cli/ckit" -o ~/.local/bin/ckit && chmod +x ~/.local/bin/ckit
-\`\`\`
-
-### 常用命令速查
-- \`ckit status [--json]\`: 检查 GPU 实例状态、当前模型 Profile、排队情况与 CU 余额
-- \`ckit profiles [--json]\`: 查询网关支持的所有模型 Profiles 及 Workflows 工作流列表
-- \`ckit wake [--profile ID] [--wait]\`: 唤醒或加入 GPU 实例（加入现有会话无需重复开机）
-- \`ckit generate --prompt "..." [--preset "Fast alt"]\`: 执行快速文生图
-- \`ckit stop\`: 立即关闭 GPU 实例，释放算力停止计费
-- \`ckit mcp\`: 启动标准输入输出 (stdio) MCP 服务
-
----
-
-## 3. 怎么查询支持的 ComfyUI 工作流 (Query Workflows)
-
-在生图前，Agent 可以通过以下方式动态获取网关支持的模型 Profile 及旗下全部可用工作流：
-
-1. **CLI 命令行查询**:
-\`\`\`bash
-ckit profiles --json
-\`\`\`
-2. **HTTP API 查询 (相对路径)**:
-向 \`GET /_gate/profiles\` 发送请求，返回包含当前可用 Profile 列表（如 \`moss-image\`, \`sd-latest\`, \`qwen-image\`）以及每个 Profile 下全部已注册工作流（如 \`matlowai-presets\`, \`matlowai-img2img\`, \`akhaliq-4step\`, \`official-t2i\` 等）的完整定义与许可。
-3. **查询当前 GPU 运行状态**:
-向 \`GET /_gate/status\` 发送请求，返回当前 GPU 运行的 Profile、会话阶段以及默认视图。
-
----
-
-## 4. 选型决策：什么时候用文生图？什么时候用图生图？
-
-- **纯文字构思 / 概念生图 -> 使用文生图 (Txt2Img)**:
-  - 推荐调用 MCP 工具: \`gate_txt2img(prompt=..., negative_prompt=..., preset="Fast alt", seed=..., width=1024, height=1024)\`
-  - **默认画质预设**: \`"Fast alt"\` (10 步超快且画质极佳，内置抗条纹 DeBand LoRA)。
-  - **负向提示词**: 默认已注入画质优化负向词 (\`worst quality, bad anatomy, watermark, jpeg artifact\`)。
-- **提供参考底图 / 局部重绘 / 风格迁移 -> 使用图生图 (Img2Img)**:
-  - **必须步骤**: 先调用 \`POST /upload/image\` 上传参考底图（见下文透传说明）。
-  - **推荐工作流**: \`matlowai-img2img\` (或原生透传 \`/prompt\`)。
-  - **重绘幅度 \`denoise\` 调节指南**:
-    - \`0.2 ~ 0.35\`: 微调细节、画质修复、高清放大，构图完全锁定。
-    - \`0.4 ~ 0.65\`: 改变服装、发型、局部物品或光影风格，主体轮廓保留。
-    - \`0.7 ~ 1.0\`: 剧烈重绘创作，仅保留原图色彩调性。
-
----
-
-## 5. 原生 ComfyUI 接口透传与参考图上传（图生图核心）
-
-当 Gateway 状态为 \`ready\` 时，网关同时扮演安全反向代理角色，所有原生 ComfyUI 请求直接透传到后端内核，**已全部打通认证与 Cloudflare 拦截**：
-
-### 核心开放接口清单 (相对路径)
-- \`POST /upload/image\`: **图生图核心**。上传参考底图到 ComfyUI input 目录（\`multipart/form-data\`，字段 \`image\`, \`overwrite="true"\`，返回 \`{"name": "...", "subfolder": "", "type": "input"}\`）。
-- \`POST /upload/mask\`: 上传 Inpainting 蒙版图。
-- \`POST /prompt\`: 提交原生 node graph JSON 任务排队（在 \`LoadImage\` 节点填入上传拿到的图片名）。
-- \`GET /prompt\`: 查询排队中的任务队列。
-- \`GET /history/{prompt_id}\`: 查询任务执行输出与图片名。
-- \`GET /view?filename={filename}&type=output\`: 获取输出图像文件。
-- \`GET /view_metadata?filename={filename}\`: 读取已生成图片中内嵌的工作流元数据。
-- \`GET /object_info\`: 获取所有 ComfyUI 节点类参数与 Schema。
-- \`GET /system_stats\`: 查询 GPU 显存 (VRAM) 与系统负载。
-- \`GET /queue\` & \`POST /queue\`: 查询排队情况或清空队列。
-- \`POST /interrupt\`: 紧急中断当前正在执行的绘图计算。
-- \`GET /ws?clientId={id}\`: 订阅实时执行进度 WebSocket。
-
-### 图生图底图上传示例 (Python):
-\`\`\`python
-import urllib.request, uuid, json
-
-def upload_image(gateway_url, token, image_path):
-    boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
-    with open(image_path, "rb") as f:
-        img_bytes = f.read()
-    filename = image_path.split("/")[-1]
-    body = (
-        f"--{boundary}\\r\\nContent-Disposition: form-data; name=\\"image\\"; filename=\\"{filename}\\"\\r\\nContent-Type: image/png\\r\\n\\r\\n".encode() +
-        img_bytes +
-        f"\\r\\n--{boundary}\\r\\nContent-Disposition: form-data; name=\\"overwrite\\"\\r\\n\\r\\ntrue\\r\\n--{boundary}--\\r\\n".encode()
-    )
-    req = urllib.request.Request(
-        f"{gateway_url.rstrip('/')}/upload/image",
-        data=body,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": f"multipart/form-data; boundary={boundary}"},
-        method="POST"
-    )
-    with urllib.request.urlopen(req) as r:
-        return json.loads(r.read())["name"]  # 填入 LoadImage 节点
-\`\`\`
-
----
-
-## 6. 权限确认、CU 算力核查与关机释放策略
-
-1. **权限确认**:
-   - 调用 \`gate_status\` (相对路径 \`GET /_gate/status\`)，读取返回中的 \`you\` 节点：
-   - 若 \`you.owner === true\`：你是系统管理员，拥有唤醒 (\`wake\`)、关机 (\`stop\`)、切换模型 (\`switch\`) 的完全权限。
-2. **CU 算力核查**:
-   - 返回中的 \`cu\` 节点包含今日消耗、当月消耗及剩余余额 (\`balance\`)：
-   - 每次绘画完成后，可在回复中向用户汇报当前 CU 余额；若 \`balance < 2.0\` 时提醒算力偏低。
-3. **Owner 关机释放策略**:
-   - Colab L4 GPU 按 CU 持续计费（约 1.71 CU/小时）。当生图任务完成且用户表示“已完成/暂时不需要绘图”时，Agent 应**主动询问或执行关机**（调用 \`gate_stop\` 或相对路径 \`POST /_gate/stop\`），释放计算单元，避免闲置浪费！
-
----
-
-## 7. 通用 Agent 接入与持久化配置 (Universal Configuration)
-
-### 方案 A: 保存至通用 Agent 配置 (推荐，跨终端跨 Agent 通用)
-建议优先将网关凭据写入通用 Agent 目录或全局 CLI 配置，全系统所有 Agent、脚本与命令行即可自动识别与共享授权：
-- **选项 1 (通用 Agent 环境)**：将环境变量追加至 \`~/.agents/.env\`：
-\`\`\`bash
-CKIT_URL="${origin}"
-CKIT_TOKEN="${token}"
-\`\`\`
-- **选项 2 (CLI 全局配置)**：写入全局配置 \`~/.config/ckit/config.json\`：
-\`\`\`json
-{
-  "default_endpoint": "${origin}",
-  "token": "${token}"
-}
-\`\`\`
-
-### 方案 B: 安装配套 Agent Skill (推荐 Skill: \`/comfy-colab-kit\`)
-如果你支持 Agent Skills 技能库标准 (如 Cursor Agent, Claude Code, OpenClaw, Antigravity)，请将技能定义写入 \`~/.agents/skills/comfy-colab-kit/SKILL.md\`：
-\`\`\`bash
-mkdir -p ~/.agents/skills/comfy-colab-kit
-curl -sSL "${origin}/_gate/static/../../skills/comfy-colab-kit/SKILL.md" 2>/dev/null || true
-# 或直接由 Agent 引用当前已掌握的 comfy-colab-kit skill 指令
-\`\`\`
-
-### 方案 C: 配置为 MCP 工具 (支持 MCP 协议的 Agent / IDE)
-如果你支持 Model Context Protocol，请将以下服务配置添加到你的 MCP 配置文件中（例如 \`~/.agents/mcp.json\` 或当前宿主环境的 MCP 配置）：
-\`\`\`json
-{
-  "mcpServers": {
-    "comfy-colab": {
-      "command": "python3",
-      "args": ["-m", "ckit.mcp_server"],
-      "env": {
-        "CKIT_URL": "${origin}",
-        "CKIT_TOKEN": "${token}"
-      }
-    }
-  }
-}
-\`\`\`
-> **远程 HTTP MCP 端点 (若客户端支持 Streamable / HTTP MCP)**:
-> - **Endpoint**: \`${origin}/mcp\`
-> - **HTTP Header**: \`Authorization: Bearer ${token}\`
-
----
-
-## 8. 方式 B: 终端命令与一键配对 (Device Flow)
-如果你在终端运行或 Token 失效，可随时在命令行执行：
-\`\`\`bash
-python3 -m ckit auth ${origin}
-\`\`\`
-终端将自动弹出浏览器授权页 (或访问终端提示的链接)。用户只需在浏览器中点击「批准 (Approve)」，即可完成一键配对授权！
-
----
-
-## 9. 立即验证与测试 (Python Snippet)
-你可以直接运行此脚本测试网关连通性：
-\`\`\`python
-import urllib.request, json
-req = urllib.request.Request(
-    "${origin}/_gate/status",
-    headers={"Authorization": "Bearer ${token}"}
-)
-with urllib.request.urlopen(req) as r:
-    print("Gateway State:", json.loads(r.read())["state"])
-\`\`\`
-
-请向用户确认你已成功获取这些指令。当用户提出生图需求时，自动检查 GPU 状态并在需要时唤醒，调用 \`gate_txt2img\` 生成图片！`;
-}
-
-async function copyAIPromptWorkflow(tokenStr=""){
- let tok=tokenStr||latestAgentToken;
- const btn=$("copy-ai-prompt-btn");
- const origTxt=$("copy-ai-prompt-txt")?$("copy-ai-prompt-txt").textContent:(lang==="zh"?"复制 AI Agent 接入指令":"Copy Prompt for AI Agent");
- if(!tok){
-  if(btn){
-   btn.disabled=true;
-   $("copy-ai-prompt-txt").textContent=lang==="zh"?"正在获取接入凭证...":"Fetching credentials...";
-  }
-  try{
-   const dateStr=new Date().toISOString().slice(5,10);
-   const res=await api("/api/agent-tokens",{
-    method:"POST",
-    body:JSON.stringify({name:`Cursor/Claude (${dateStr})`,force:false})
-   });
-   tok=res.token;
-   latestAgentToken=tok;
-   loadAgentTokens();
-  }catch(err){
-   alert((lang==="zh"?"获取 Agent Token 失败: ":"Failed to get token: ")+err.message);
-   if(btn){
-    btn.disabled=false;
-    $("copy-ai-prompt-txt").textContent=origTxt;
-   }
-   return;
-  }
- }
-
- const promptText=generateAIPrompt(tok);
- try{
-  await navigator.clipboard.writeText(promptText);
-  showToast(lang==="zh"?"AI Agent 接入指令与 Token 已复制！直接粘贴给 Cursor / Claude 即可。":"AI Agent setup prompt & token copied! Paste into Cursor / Claude.");
-  if(btn){
-   $("copy-ai-prompt-txt").textContent=lang==="zh"?"已复制到剪贴板!":"Copied to clipboard!";
-   setTimeout(()=>{
-    btn.disabled=false;
-    $("copy-ai-prompt-txt").textContent=origTxt;
-   },2500);
-  }
- }catch(_){
-  prompt(lang==="zh"?"请复制 AI 接入指令:":"Copy AI Prompt:",promptText);
-  if(btn){
-   btn.disabled=false;
-   $("copy-ai-prompt-txt").textContent=origTxt;
-  }
- }
-}
-
-if($("copy-ai-prompt-btn"))$("copy-ai-prompt-btn").onclick=()=>copyAIPromptWorkflow();
-if($("copy-ai-prompt-modal-btn"))$("copy-ai-prompt-modal-btn").onclick=()=>{
- const tok=$("new-token-val").textContent;
- copyAIPromptWorkflow(tok);
-};
-
-tokenConfirmBtn.onclick=async()=>{
- const name=tokenNameInput.value.trim()||"Cursor";
- tokenConfirmBtn.disabled=true;
- tokenConfirmBtn.textContent=lang==="zh"?"生成中...":"Generating...";
- try{
-  const res=await api("/api/agent-tokens",{
-   method:"POST",
-   body:JSON.stringify({name,force:true})
+/* 1. 3-State System Theme Controller (auto | light | dark) */
+const mediaDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function applyTheme(mode) {
+  const cleanMode = (mode === 'light' || mode === 'dark') ? mode : 'auto';
+  const resolved = cleanMode === 'auto' ? ((mediaDark && mediaDark.matches) ? 'dark' : 'light') : cleanMode;
+  document.documentElement.setAttribute('data-theme-mode', cleanMode);
+  document.documentElement.setAttribute('data-theme', resolved);
+  try { localStorage.setItem('kit.theme_mode', cleanMode); } catch (e) {}
+  document.querySelectorAll('[data-theme-opt]').forEach(btn => {
+    const active = btn.getAttribute('data-theme-opt') === cleanMode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
-  const tok=res.token;
-  latestAgentToken=tok;
-  $("new-token-val").textContent=tok;
-  const origin=window.location.origin;
-  const mcpConfig={
-   mcpServers:{
-    "comfy-colab":{
-     command:"python3",
-     args:["-m","ckit.mcp_server"],
-     env:{
-      CKIT_URL:origin,
-      CKIT_TOKEN:tok
-     }
-    }
-   }
-  };
-  $("mcp-config-json").textContent=JSON.stringify(mcpConfig,null,2);
-  tokenStepInput.style.display="none";
-  tokenStepResult.style.display="block";
-  loadAgentTokens();
- }catch(err){
-  alert((lang==="zh"?"生成失败: ":"Failed to generate token: ")+err.message);
- }finally{
-  tokenConfirmBtn.disabled=false;
-  tokenConfirmBtn.textContent=lang==="zh"?"确认生成":"Create";
- }
-};
-
-$("copy-token-val-btn").onclick=async()=>{
- const tok=$("new-token-val").textContent;
- try{
-  await navigator.clipboard.writeText(tok);
-  const orig=$("copy-token-val-btn").textContent;
-  $("copy-token-val-btn").textContent=lang==="zh"?"已复制!":"Copied!";
-  setTimeout(()=>{$("copy-token-val-btn").textContent=orig},2000);
- }catch(_){
-  prompt(lang==="zh"?"请复制 Token:":"Copy Token:",tok);
- }
-};
-
-$("copy-mcp-json-btn").onclick=async()=>{
- const cfg=$("mcp-config-json").textContent;
- try{
-  await navigator.clipboard.writeText(cfg);
-  const orig=$("copy-mcp-json-btn").textContent;
-  $("copy-mcp-json-btn").textContent=lang==="zh"?"已复制配置!":"Copied Config!";
-  setTimeout(()=>{$("copy-mcp-json-btn").textContent=orig},2000);
- }catch(_){
-  prompt(lang==="zh"?"请复制配置:":"Copy Config:",cfg);
- }
-};
-
-tokenDoneBtn.onclick=()=>{closeTokenModal()};
-
-function escapeHtml(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
-
-async function loadAgentTokens(){
- const listEl=$("agent-tokens-list");
- listEl.innerHTML=`<div class="empty-tokens">${lang==="zh"?"正在读取...":"Loading..."}</div>`;
- try{
-  const res=await api("/api/agent-tokens");
-  const tokens=res.tokens||[];
-  if(!tokens.length){
-   listEl.innerHTML=`<div class="empty-tokens">${lang==="zh"?"暂无绑定的 Agent 设备":"No connected Agents"}</div>`;
-   return;
-  }
-  listEl.innerHTML="";
-  for(const tok of tokens){
-   const card=document.createElement("div");
-   card.className="token-card"+(tok.revoked?" revoked":"");
-   const createdStr=new Date(tok.created_at*1000).toLocaleDateString();
-   const lastUsedStr=tok.last_used_at?new Date(tok.last_used_at*1000).toLocaleDateString():(lang==="zh"?"从未":"Never");
-   card.innerHTML=`
-     <div class="token-info">
-       <div class="token-name">${escapeHtml(tok.name)}</div>
-       <div class="token-time">${lang==="zh"?`创建: ${createdStr} · 调用: ${lastUsedStr}`:`Created: ${createdStr} · Used: ${lastUsedStr}`}</div>
-     </div>
-   `;
-   const actionsDiv=document.createElement("div");
-   actionsDiv.style.cssText="display:flex;align-items:center;gap:6px;flex-shrink:0;";
-
-   const pBtn=document.createElement("button");
-   pBtn.type="button";
-   pBtn.className="token-prompt-btn";
-   pBtn.textContent=lang==="zh"?"AI 指令":"Prompt";
-   pBtn.title=lang==="zh"?"复制此 Agent 的 AI 接入指令":"Copy AI setup prompt";
-   pBtn.onclick=(e)=>{
-    e.stopPropagation();
-    copyAIPromptWorkflow(tok.token||"");
-   };
-   actionsDiv.appendChild(pBtn);
-
-   const delBtn=document.createElement("button");
-   delBtn.type="button";
-   delBtn.className="btn-revoke";
-   delBtn.textContent=lang==="zh"?"删除":"Delete";
-   delBtn.title=lang==="zh"?"删除此 Agent 凭据":"Delete this Agent token";
-   delBtn.onclick=async(e)=>{
-    e.stopPropagation();
-    const confirmMsg=lang==="zh"
-      ?`确认删除 Agent「${tok.name}」吗？\n删除后该设备将无法连接网关。`
-      :`Are you sure you want to delete Agent "${tok.name}"?\nThis device will lose gateway access immediately.`;
-    if(!confirm(confirmMsg))return;
-    try{
-     await api(`/api/agent-tokens/${tok.id}`,{method:"DELETE"});
-     loadAgentTokens();
-    }catch(err){
-     alert((lang==="zh"?"删除失败: ":"Error: ")+err.message);
-    }
-   };
-   actionsDiv.appendChild(delBtn);
-   card.appendChild(actionsDiv);
-   listEl.appendChild(card);
-  }
- }catch(err){
-  listEl.innerHTML=`<div class="empty-tokens" style="color:#f87171;">${lang==="zh"?"读取失败: ":"Failed to load: "}${escapeHtml(err.message)}</div>`;
- }
 }
-
-if($("copy-cmd-btn")){$("copy-cmd-btn").onclick=async(e)=>{
- e.stopPropagation();
- const cmd=$("cli-auth-cmd")?$("cli-auth-cmd").textContent:"";
- try{
-  await navigator.clipboard.writeText(cmd);
-  const orig=$("copy-cmd-btn").textContent;
-  $("copy-cmd-btn").textContent=lang==="zh"?"已复制!":"Copied!";
-  setTimeout(()=>{$("copy-cmd-btn").textContent=orig},2000);
- }catch(_){
-  prompt(lang==="zh"?"请复制命令:":"Copy command:",cmd);
- }
-};}
-
-const card=$("card");card.addEventListener("pointermove",e=>{const r=card.getBoundingClientRect();card.style.setProperty("--mx",e.clientX-r.left+"px");card.style.setProperty("--my",e.clientY-r.top+"px")});
-async function api(p,o){const r=await fetch(p,Object.assign({headers:{"Content-Type":"application/json"}},o));const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.message||r.status);return j}
-function fmt(s){s=Math.max(0,Math.round(s));return s>=3600?`${Math.floor(s/3600)}h ${Math.floor(s%3600/60)}m`:s>=60?`${Math.floor(s/60)}m ${s%60}s`:`${s}s`}
-function dlp(d){if(!d)return null;const G=1e9;
- if(d.core_bytes_total!=null||d.bytes_total!=null){const core=d.core_bytes_total>0;
-  return{done:core?d.core_bytes_done:d.bytes_done,total:core?d.core_bytes_total:d.bytes_total,rate:d.bytes_per_s||0,
-   eta:d.eta_s!=null&&!core?d.eta_s:(d.bytes_per_s>0?((core?d.core_bytes_total-d.core_bytes_done:d.bytes_total-d.bytes_done)/d.bytes_per_s):null),
-   paused:!!d.paused,restarts:d.restarts||0,files:`${d.files_done}/${d.files_total}`,files_done:d.files_done,files_total:d.files_total,core_done:!!d.core_done,bg:core&&d.bytes_total>d.core_bytes_total?d.bytes_total-d.core_bytes_total:0}}
- if(!d.total_gb)return null;return{done:d.done_gb*G,total:d.total_gb*G,rate:(d.gbps||0)*G,eta:d.gbps>0?(d.total_gb-d.done_gb)/d.gbps:null,paused:false,restarts:0,files:`${d.files_done}/${d.files_total}`,files_done:d.files_done,files_total:d.files_total,core_done:false,bg:0}}
-function formatBytes(b){
- if(b==null||isNaN(b)||b<=0)return"0 B";
- if(b<1e6)return`${(b/1e3).toFixed(1)} KB`;
- if(b<1e9)return`${(b/1e6).toFixed(1)} MB`;
- return`${(b/1e9).toFixed(b>=1e10?1:2)} GB`;
-}
-const gb=b=>formatBytes(b);
-
-// Custom Select Implementation
-const profTrigger=$("prof-trigger"),profPopover=$("prof-popover"),profItems=$("prof-items"),customSelect=$("custom-select"),profLabel=$("plabel-txt"),selBackdrop=$("sel-backdrop");
-function toggleSelect(force){
- selectOpen=force!==undefined?force:!selectOpen;
- if(selectOpen){
-  if(langOpen)toggleLangMenu(false);
-  if(userOpen)toggleUserMenu(false);
- }
- profPopover.classList.toggle("open",selectOpen);
- customSelect.classList.toggle("sel-open",selectOpen);
- profTrigger.setAttribute("aria-expanded",selectOpen);
- if(selBackdrop)selBackdrop.style.display=selectOpen?"block":"none";
-}
-profTrigger.onclick=(e)=>{e.stopPropagation();toggleSelect()};
-// The "Profile" caption doubles as a tap target for opening the picker.
-profLabel.onclick=(e)=>{e.stopPropagation();toggleSelect()};
-$("pop-close").onclick=(e)=>{e.stopPropagation();toggleSelect(false)};
-if(selBackdrop){
- selBackdrop.addEventListener("pointerdown",e=>{
-  e.preventDefault();
-  toggleSelect(false);
- });
-}
-
-// Universal outside-click and escape handling
-document.addEventListener("pointerdown",e=>{
- const inWidget=(t)=>t instanceof Node&&(customSelect&&(customSelect.contains(t)||(profLabel&&profLabel.contains(t))));
- if(selectOpen&&(!e.target||!inWidget(e.target)))toggleSelect(false);
- if(langOpen&&(!e.target||(e.target instanceof Node&&!langDropdown.contains(e.target))))toggleLangMenu(false);
- if(userOpen&&(!e.target||(e.target instanceof Node&&!userDropdown.contains(e.target))))toggleUserMenu(false);
+document.querySelectorAll('[data-theme-opt]').forEach(btn => {
+  btn.addEventListener('click', () => applyTheme(btn.getAttribute('data-theme-opt')));
 });
-window.addEventListener("blur",()=>{
- closeAllMenus();
-});
-window.addEventListener("keydown",e=>{
- if(e.key==="Escape")closeAllMenus();
-});
-
-function renderCustomSelect(){
- if(!profiles.length)return;
- const cur=profiles.find(x=>x.id===selectedProfileId)||profiles[0];
- selectedProfileId=cur.id;
- $("profile").value=cur.id;
- $("sel-title").textContent=cur.title;
- $("sel-desc").textContent=`${t("workflows_count",{count:cur.workflows.filter(w=>!w.optional).length})} · ~${cur.size_gb_default} GB · ${cur.accelerator}`;
- $("plabel-txt").textContent=t("profile_label");
- $("pop-title").textContent=t("select_profile");
- if($("hprof"))$("hprof").textContent=cur.id;
-
- profItems.innerHTML="";
- for(const p of profiles){
-  const item=document.createElement("div");
-  item.className="sel-item"+(p.id===cur.id?" active":"");
-  item.setAttribute("role","option");
-  item.setAttribute("aria-selected",p.id===cur.id);
-  item.innerHTML=`
-   <div class="sel-info">
-     <span class="sel-title">${p.title}</span>
-     <span class="sel-desc">${t("workflows_count",{count:p.workflows.filter(w=>!w.optional).length})} · ~${p.size_gb_default} GB · ${p.accelerator}</span>
-   </div>
-   <svg class="sel-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-  `;
-  item.onclick=(e)=>{
-   e.stopPropagation();
-   selectedProfileId=p.id;
-   toggleSelect(false);
-   renderCustomSelect();
-  };
-  profItems.appendChild(item);
- }
-}
-
-const SVG_ZAP=`<svg class="btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`;
-const SVG_ROTATE=`<svg class="btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`;
-const SVG_SPIN=`<svg class="btn-icon spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>`;
-
-function formatReason(r){
- if(!r)return"";
- if(lang==="zh"){
-  if(r==="stopped by agent")return"空闲自动释放";
-  if(r==="stopped by user"||r.startsWith("stopped by "))return"手动关机";
-  if(r.startsWith("idle timeout"))return"超时休眠";
-  if(r.startsWith("budget exceeded"))return"算力超额";
- }
- if(r.includes("Not Found")||r.includes("unassign")||r.includes("stop failed")){
-  return lang==="zh"?"实例已释放并休眠":"Instance released and sleeping";
- }
- if(r.length>100||r.includes("Traceback")||r.includes("ColabRequestError")){
-  return lang==="zh"?"运行异常（详细日志见控制台）":"Runtime error (see console)";
- }
- return r;
-}
-
-function render(){
- if(!S)return;
- if(S.you&&S.you.email)updateUserUI(S.you);
- const serverNow = S.server_time ? S.server_time + ((Date.now() - (render.lastSyncTime || Date.now())) / 1000) : (Date.now() / 1000);
- const st=S.state,waking=BOOT.includes(st)||st==="switching",now=serverNow;
- if(st!==lastSt){stageT[st]=now;lastSt=st;window.kitBg&&kitBg.set({amp:waking?1.6:1})}
- const cls=st==="ready"?"ready":st==="failed"?"failed":waking||st==="stopping"?"waking":"";
- $("badge").className="badge "+cls;
- $("btext").textContent={sleeping:t("badge_sleeping"),ready:t("badge_ready"),failed:t("badge_failed"),stopping:t("badge_stopping"),switching:t("badge_switching")}[st]||t("badge_waking");
- const curP=(S.state==="ready"||S.state==="switching"||BOOT.includes(S.state))?(S.profile||selectedProfileId):(selectedProfileId||S.profile);
- if($("hprof")){$("hprof").hidden=!curP;$("hprof").textContent=curP||"";}
- const vc=t("online",{count:S.clients||1});
- if($("vcount"))$("vcount").textContent=vc;
- if($("panel-vcount"))$("panel-vcount").textContent=vc;
- if($("card-vcount"))$("card-vcount").textContent=vc;
- $("title").textContent=st==="sleeping"?t("sleeping_title"):st==="ready"?t("ready_title"):st==="failed"?t("failed_title"):st==="stopping"?t("stopping_title"):st==="switching"?t("switching_title"):t("waking_title");
- const started=S.session_started||S.since;
- $("sub").textContent=st==="sleeping"?(S.reason?t("sleeping_last_stop",{reason:formatReason(S.reason)}):t("sleeping_sub")):st==="failed"?(S.reason||""):waking?t("elapsed",{time:fmt(now-started)}):st==="ready"?t("ready_sub"):"";
- $("con-title").textContent=t("console_title");
- $("footer-txt").textContent=t("footer");
-
- const stages = (S && S.enable_smoke_test === false) ? STAGES_KEYS.filter(s => s[0] !== "smoke_testing") : STAGES_KEYS;
- const bootKeys = stages.map(s => s[0]);
- const ol=$("stages");ol.hidden=!waking;const ci=bootKeys.indexOf(st);const d=dlp(S.progress&&S.progress.download);
- const durs=(S&&S.stage_durations)||{};
- // Rebuild the list only when its shape changes; refresh the per-stage timers in place
- // so a 1s tick never blows away text selection or focus.
- const sig=bootKeys.join(",")+"|"+ci+"|"+lang;
- if(render.stageSig!==sig){
-  ol.innerHTML="";render.stageTimes=[];
-  stages.forEach(([k,lKey],i)=>{
-   const li=document.createElement("li");li.className=i<ci?"done":i===ci?"cur":"";
-   li.innerHTML=`<span class="k">${i<ci?"✓":""}</span><span>${t(lKey)}</span><span class="t"></span>`;
-   ol.appendChild(li);render.stageTimes.push(li.querySelector(".t"));
+if (mediaDark && mediaDark.addEventListener) {
+  mediaDark.addEventListener('change', () => {
+    if ((localStorage.getItem('kit.theme_mode') || 'auto') === 'auto') applyTheme('auto');
   });
-  render.stageSig=sig;
- }
- stages.forEach(([k,lKey],i)=>{
-  let tStr="";
-  const sd=durs[k];
-  if(i<ci){
-   if(sd&&sd.duration!=null)tStr=`${sd.duration}s`;
-   else if(sd&&sd.elapsed!=null)tStr=`${sd.elapsed}s`;
-   else if(sd&&sd.start)tStr=fmt(now-sd.start);
-  }else if(i===ci){
-   const startT=(sd&&sd.start)||stageT[k]||now;
-   tStr=fmt(Math.max(1, now-startT));
-  }
-  if(k==="downloading"&&d&&d.total&&i<=ci){
-   const dlPct=(d.files_done!=null&&d.files_total!=null&&d.files_done<d.files_total)?Math.min(99,Math.floor(100*d.done/d.total)):Math.min(100,Math.round(100*d.done/d.total));
-   tStr=(tStr?tStr+" · ":"")+`${dlPct}%`+(d.paused?` · ${t("paused")}`:"");
-  }
-  if(render.stageTimes[i])render.stageTimes[i].textContent=tStr;
- });
+}
+applyTheme(localStorage.getItem('kit.theme_mode') || 'auto');
 
- $("prog").hidden=!waking;
- if(waking&&ci>=0){
-  const BRACKETS={
-   allocating:[0,12],
-   installing:[12,28],
-   downloading:[28,88],
-   booting:[88,(S&&S.enable_smoke_test===false)?99:97],
-   smoke_testing:[97,99.5]
-  };
-  const [bStart,bEnd]=BRACKETS[st]||[0,99];
-  const bSpan=bEnd-bStart;
-  let frac=0;
-  const sd=durs[st];
-  const elapsed=sd&&sd.start?(now-sd.start):(now-(stageT[st]||now));
-  if(st==="downloading"&&d&&d.total){
-   frac=Math.min(1,Math.max(0,d.done/d.total));
-  }else if(st==="allocating"){
-   frac=Math.min(0.95,elapsed/15);
-  }else if(st==="installing"){
-   frac=Math.min(0.95,elapsed/35);
-  }else if(st==="booting"){
-   frac=Math.min(0.95,elapsed/30);
-  }else if(st==="smoke_testing"){
-   frac=Math.min(0.95,elapsed/25);
+/* 2. Guarded Clipboard Helper (with textarea fallback for mobile WebViews) */
+async function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try { await navigator.clipboard.writeText(text); showToast('已复制到剪贴板'); return true; } catch (e) {}
   }
-  const curStagePct=bStart+frac*bSpan;
-  if(render.maxPct==null)render.maxPct=0;
-  render.maxPct=Math.max(render.maxPct,bStart,curStagePct);
-  const pct=Math.min(99.5,render.maxPct);
-  $("pbar").style.width=pct.toFixed(1)+"%";
-  $("plabel").textContent=`${Math.floor(pct)}%`;
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(ta);
+  showToast(ok ? '已复制到剪贴板' : '复制失败，请手动长按复制');
+  return ok;
+}
 
-  let eta=null;
-  if(st==="downloading"&&d&&d.eta!=null){
-   let dEta=d.eta;
-   if(d.total>0&&(d.done/d.total)>0.8){
-    dEta=Math.min(dEta,90);
-   }
-   eta=dEta+25;
-  }else if(st==="allocating"){
-   eta=Math.max(15,360-Math.round(now-started));
-  }else if(st==="installing"){
-   eta=Math.max(10,340-Math.round(now-started));
-  }else if(st==="booting"){
-   eta=Math.max(5,30-Math.round(elapsed));
-  }else{
-   eta=Math.max(5,15);
+function showToast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(window.__toastT);
+  window.__toastT = setTimeout(() => { el.hidden = true; }, 2600);
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function fmtSec(s) {
+  s = Math.max(0, Math.round(s));
+  if (s >= 3600) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  if (s >= 60) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${s}s`;
+}
+
+async function api(path, opts = {}) {
+  const headers = opts.body instanceof FormData ? {} : {'Content-Type': 'application/json'};
+  const r = await fetch(path, Object.assign({headers}, opts));
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.message || j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+/* 3. State Initialization */
+const init = window.__INIT__ || {};
+let S = init.status || null;
+let profiles = (init.profiles && init.profiles.profiles) || [];
+let presets = (init.profiles && init.profiles.presets) || [
+  'Fast alt · fix + darask0 0.35 · 10 steps',
+  'Fast · fix + lodestones DMD 0.35 · 10 steps',
+  'Balanced · fix + lodestones DMD 0.28 · 14 steps',
+  'Quality · banding fix · 25 steps'
+];
+let jobsMap = new Map();
+((init.jobs) || []).forEach(j => jobsMap.set(j.prompt_id, j));
+let logLines = 0;
+
+if (Array.isArray(init.logs) && init.logs.length) {
+  $('log-pre').textContent = init.logs.join('\n') + '\n';
+  logLines = init.logs.length;
+  $('log-count').textContent = `${logLines} 行`;
+}
+
+function renderSelectors() {
+  const pSel = $('profile-select');
+  const currentProf = (S && S.profile) || (init.profiles && init.profiles.default) || (profiles[0] && profiles[0].id) || '';
+  pSel.innerHTML = profiles.map(p =>
+    `<option value="${esc(p.id)}" ${p.id === currentProf ? 'selected' : ''}>${esc(p.title)} (~${p.size_gb_default} GB)</option>`
+  ).join('');
+
+  const prSel = $('preset-select');
+  prSel.innerHTML = presets.map((pr, idx) =>
+    `<option value="${esc(pr)}" ${idx === 0 ? 'selected' : ''}>${esc(pr)}</option>`
+  ).join('');
+}
+
+const STATE_LABELS = {
+  sleeping: '休眠中', allocating: '分配算力中', installing: '安装依赖中',
+  downloading: '拉取权重中', booting: '初始化内核', smoke_testing: '冒烟测试中',
+  ready: '就绪 · 保温中', switching: '切换预设中', stopping: '正在释放', failed: '异常停止'
+};
+
+function renderStatus() {
+  if (!S) return;
+  const st = S.state || 'sleeping';
+  const booting = ['allocating', 'installing', 'downloading', 'booting', 'smoke_testing', 'switching'].includes(st);
+  const pill = $('state-pill');
+  pill.className = 'pill ' + (st === 'ready' ? 'ready' : st === 'failed' ? 'failed' : (booting || st === 'stopping') ? 'waking' : '');
+  $('state-text').textContent = STATE_LABELS[st] || st;
+
+  if (st === 'ready') {
+    const idleRem = S.idle_remaining_s != null ? fmtSec(S.idle_remaining_s) : `${S.idle_timeout_min || 10}m`;
+    $('idle-timer-label').textContent = S.queue_busy ? '正在渲染作业' : `保温剩余 ${idleRem}`;
+    $('state-desc').textContent = `当前预设: ${S.profile || '默认'}。连续提交任务将直接复用显存热模型。`;
+  } else if (booting) {
+    $('idle-timer-label').textContent = '启动中';
+    $('state-desc').textContent = '正在准备 Google Colab L4 无头运行环境与模型权重…';
+  } else if (st === 'failed') {
+    $('idle-timer-label').textContent = '需检查';
+    $('state-desc').textContent = S.reason || '上次运行异常中断，可查看日志后重试。';
+  } else {
+    $('idle-timer-label').textContent = '0 CU/h';
+    $('state-desc').textContent = S.reason ? `已释放 (${S.reason})。空闲零算力消耗。` : 'GPU 已释放，当前无算力消耗。';
   }
-  $("eta").textContent=t("eta",{time:fmt(eta)});
 
-  if(st==="downloading"&&d&&d.total){
-   const parts=[`${formatBytes(d.done)} / ${formatBytes(d.total)}`];
-   if(d.files)parts.push(d.files);
-   if(d.rate>0)parts.push(`${(d.rate/1e6).toFixed(1)} MB/s`);
-   if(d.paused)parts.push(t("paused"));
-   if(d.restarts>0)parts.push(t(d.restarts>1?"stalled_restarted_p":"stalled_restarted",{count:d.restarts}));
-   if(d.bg>0)parts.push(t("later",{size:formatBytes(d.bg)}));
-   $("pdl").textContent=parts.join(" · ");
-  }else if(st==="installing"){
-   if(d&&d.done>1e7){
-    $("pdl").textContent=`${t("info_installing")} (${formatBytes(d.done)} / ${formatBytes(d.total)})`;
-   }else{
-    $("pdl").textContent=t("info_installing");
-   }
-  }else if(st==="allocating"){
-   $("pdl").textContent=t("info_allocating");
-  }else if(st==="booting"){
-   $("pdl").textContent=t("info_booting");
-  }else if(st==="smoke_testing"){
-   $("pdl").textContent=t("info_smoke");
-  }else{
-   $("pdl").textContent="";
-  }
- }else{
-  render.maxPct=0;
-  if(st==="ready"){
-   $("pbar").style.width="100%";
-   $("plabel").textContent="100%";
-  }
- }
-
- $("pick").hidden=!(st==="sleeping"||st==="failed");
- const w=$("wake");w.hidden=st==="ready";
- const canWake = S && S.can_wake !== false && (!S.owner_only || !S.owner_only.includes("wake") || (S.you && S.you.owner));
- if(st==="failed"){
-  w.disabled=!canWake;
-  w.title=canWake?"":t("wake_disabled_hint");
-  $("wicon").innerHTML=SVG_ROTATE;$("wtext").textContent=t("retry_btn");
- }else if(st==="sleeping"){
-  w.disabled=!canWake;
-  w.title=canWake?"":t("wake_disabled_hint");
-  $("wicon").innerHTML=SVG_ZAP;$("wtext").textContent=t("wake_btn");
- }else{
-  w.disabled=true;
-  w.title="";
-  $("wicon").innerHTML=SVG_SPIN;$("wtext").textContent=t("starting_btn");
- }
-
- const stopBtn=$("stop");
- const showStop = st!=="sleeping"&&st!=="stopping";
- stopBtn.hidden=!showStop;
- if(showStop){
-  const canStop = S && S.can_stop !== false;
-  stopBtn.disabled = !canStop;
-  stopBtn.classList.toggle("disabled", !canStop);
-  stopBtn.title = canStop ? "" : t("stop_disabled_hint");
- }
- stopBtn.textContent=t("stop_btn");
-
- const isOwner=!!(S&&S.you&&S.you.owner);
- const metaEl=$("meta");
- if(metaEl){
-  if(!isOwner||!S.cu){
-   metaEl.style.display="none";
-  }else{
-   metaEl.style.display="grid";
-   const cu=S.cu||{};
-   const cuHtml=`
-    <div><small>${t("cu_today")}</small><b>${(cu.today||0).toFixed(2)}</b></div>
-    <div><small>${t("cu_month")}</small><b>${(cu.month||0).toFixed(1)}</b></div>
-    <div><small>${t("cu_balance")}</small><b>${cu.balance!=null?cu.balance.toFixed(1):"—"}</b></div>
-   `;
-   if(render.cuHtml!==cuHtml){metaEl.innerHTML=cuHtml;render.cuHtml=cuHtml}
-  }
- }
- document.title=st==="sleeping"?t("title"):`${st==="ready"?t("ready_title"):st==="failed"?t("failed_title"):t("waking_title")} · ${t("title")}`;
-
- const frame=$("comfy-frame"),mainGate=$("gate-main"),footerEl=$("footer-txt"),hBadge=$("h-badge");
- if(st==="ready"){
-  document.body.classList.add("app-ready");
-  if(!render.readyMounted){
-   render.readyMounted=true;
-   card.classList.add("out");
-   setTimeout(()=>{
-    if(mainGate)mainGate.style.display="none";
-    if(footerEl)footerEl.style.display="none";
-    const b=$("bg"),g=document.querySelector(".grid");
-    if(b)b.style.display="none";if(g)g.style.display="none";
-   },350);
-  }else{
-   if(mainGate)mainGate.style.display="none";
-   if(footerEl)footerEl.style.display="none";
-   const b=$("bg"),g=document.querySelector(".grid");
-   if(b)b.style.display="none";if(g)g.style.display="none";
-  }
-  const targetUrl=S.backend_url||"";
-  if(targetUrl&&(!frame.src||frame.src==="about:blank"||!frame.src.startsWith(targetUrl))){
-   frame.src=targetUrl;
-  }
-  frame.style.display="block";
-  document.title=`ComfyUI · ${curP||"Kit"}`;
-
-  if(hBadge){hBadge.className="badge ready";$("h-btext").textContent=t("badge_ready");hBadge.style.display="inline-flex";}
- }else{
-  document.body.classList.remove("app-ready");
-  render.readyMounted=false;
-  card.classList.remove("out");
-  if(mainGate)mainGate.style.display="";
-  if(footerEl)footerEl.style.display="";
-  const b=$("bg"),g=document.querySelector(".grid");
-  if(b)b.style.display="";if(g)g.style.display="";
-  if(frame){frame.style.display="none";if(frame.src&&frame.src!=="about:blank")frame.src="about:blank";}
-  if(hBadge){hBadge.style.display="none";}
- }
-
- // Update Owner Session & Metrics panel
- const ownerSec=$("owner-ctrl-section");
- if(ownerSec){
-  const isRunning=S&&(S.state==="ready"||S.state==="booting"||S.state==="switching"||S.state==="downloading"||S.state==="smoke_testing");
-  if(isOwner&&S&&S.cu){
-   ownerSec.style.display="flex";
-   if($("owner-sec-title"))$("owner-sec-title").textContent=lang==="zh"?"算力指标与控制":"Compute & Control";
-   if($("panel-lbl-today"))$("panel-lbl-today").textContent=t("cu_today");
-   if($("panel-lbl-month"))$("panel-lbl-month").textContent=t("cu_month");
-   if($("panel-lbl-balance"))$("panel-lbl-balance").textContent=t("cu_balance");
-   const cu=S.cu||{};
-   if($("panel-cu-today"))$("panel-cu-today").textContent=(cu.today||0).toFixed(2);
-   if($("panel-cu-month"))$("panel-cu-month").textContent=(cu.month||0).toFixed(1);
-   if($("panel-cu-balance"))$("panel-cu-balance").textContent=cu.balance!=null?cu.balance.toFixed(1):"—";
-   const pStopBtn=$("panel-stop-btn");
-   if(pStopBtn){
-    if(isRunning){
-     pStopBtn.style.display="inline-flex";
-     const canStop=S.can_stop!==false;
-     pStopBtn.disabled=!canStop;
-     if(!pStopBtn.classList.contains("confirming")){
-      $("panel-stop-txt").textContent=lang==="zh"?"关机 · 释放 GPU":"Stop · Release GPU";
-     }
-    }else{
-     pStopBtn.style.display="none";
+  $('boot-prog-wrap').hidden = !booting;
+  if (booting) {
+    const dl = S.progress && S.progress.download;
+    let pct = st === 'allocating' ? 12 : st === 'installing' ? 28 : st === 'booting' ? 92 : 50;
+    let label = STATE_LABELS[st] || st;
+    if (dl && dl.bytes_total > 0) {
+      pct = Math.min(90, Math.round(28 + 60 * (dl.bytes_done / dl.bytes_total)));
+      label = `下载模型 ${(dl.bytes_done / 1e9).toFixed(1)} / ${(dl.bytes_total / 1e9).toFixed(1)} GB`;
     }
-   }
-  }else{
-   ownerSec.style.display="none";
+    $('boot-stage-txt').textContent = label;
+    $('boot-pct-txt').textContent = `${pct}%`;
+    $('boot-bar').style.width = `${pct}%`;
   }
- }
+
+  const canWake = S.can_wake !== false;
+  const canStop = S.can_stop !== false;
+  const wakeBtn = $('wake-btn');
+  wakeBtn.hidden = st === 'ready';
+  wakeBtn.disabled = booting || st === 'stopping' || !canWake;
+  wakeBtn.textContent = booting ? '正在启动…' : (st === 'failed' ? '重新唤醒' : '唤醒 GPU');
+
+  $('stop-btn').hidden = st === 'sleeping' || st === 'stopping';
+  $('stop-btn').disabled = !canStop;
+  $('extend-btn').hidden = st !== 'ready' || !S.can_extend || !canWake;
+  $('profile-select').disabled = !(st === 'sleeping' || st === 'failed');
+
+  const isOwner = !!(S.you && S.you.owner);
+  $('cu-metrics').hidden = !(isOwner && S.cu);
+  if (isOwner && S.cu) {
+    $('cu-today').textContent = Number(S.cu.today || 0).toFixed(2);
+    $('cu-month').textContent = Number(S.cu.month || 0).toFixed(1);
+    $('cu-balance').textContent = S.cu.balance != null ? Number(S.cu.balance).toFixed(1) : '未知';
+  }
+
+  $('queue-badge').textContent = S.queue_busy ? '作业执行中' : '队列空闲';
+  const submitQuick = $('submit-quick-btn');
+  if (st === 'ready') {
+    submitQuick.textContent = '立即生成图片';
+    submitQuick.disabled = false;
+  } else if (booting) {
+    submitQuick.textContent = '加入等待队列 (启动后自动执行)';
+    submitQuick.disabled = false;
+  } else if (canWake) {
+    submitQuick.textContent = '一键唤醒 GPU 并生成';
+    submitQuick.disabled = false;
+  } else {
+    submitQuick.textContent = '等待管理员唤醒 GPU';
+    submitQuick.disabled = true;
+  }
+
+  if (S.you) {
+    $('modal-user-info').textContent = `${S.you.email} · ${S.you.owner ? '管理员 (Owner)' : '协作者'}`;
+  }
 }
 
-function log(l){const p=$("log");p.textContent+=l+"\n";lines++;$("lcount").textContent=t("lines",{count:lines});if(p.textContent.length>60000)p.textContent=p.textContent.slice(-40000);p.scrollTop=p.scrollHeight}
-
-async function loadProfiles(){
- try{
-  if(!profiles.length){
-   const j=await api("/_gate/profiles");
-   profiles=j.profiles;
-   if(!selectedProfileId)selectedProfileId=j.default||(profiles[0]&&profiles[0].id)||"";
+function renderJobs() {
+  const list = Array.from(jobsMap.values()).sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  const box = $('jobs-container');
+  if (!list.length) {
+    box.innerHTML = '<div class="empty-box">暂无任务记录。提交提示词后，云端渲染完成的图片会自动拉回此处。</div>';
+    return;
   }
-  renderCustomSelect();
- }catch(e){console.warn("loadProfiles:",e)}
+  box.innerHTML = `<div class="jobs-grid">${list.map(j => {
+    const img = (j.images && j.images[0]) ? j.images[0] : null;
+    let statusTxt = j.status;
+    if (j.status === 'running') {
+      statusTxt = j.step && j.max_steps ? `采样 ${j.step}/${j.max_steps}` : '渲染中…';
+    } else if (j.status === 'waiting_gpu') {
+      statusTxt = '等待 GPU 就绪';
+    } else if (j.status === 'queued') {
+      statusTxt = '排队中';
+    } else if (j.status === 'success') {
+      statusTxt = j.duration_s ? `完成 · ${j.duration_s}s` : '完成';
+    } else if (j.status === 'error') {
+      statusTxt = '失败';
+    }
+    const thumbHtml = img
+      ? `<a href="${esc(img.url)}" target="_blank" rel="noopener" style="width:100%;height:100%;display:block"><img src="${esc(img.url)}" alt="${esc(j.title)}" loading="lazy"></a>`
+      : `<div style="padding:12px;text-align:center;font-size:12px;color:${j.status === 'error' ? 'var(--danger)' : 'var(--muted)'}">${esc(j.status === 'error' ? (j.error || '执行失败') : statusTxt)}</div>`;
+    return `<article class="job-card">
+      <div class="job-thumb">${thumbHtml}</div>
+      <div class="job-meta">
+        <div class="job-title" title="${esc(j.title)}">${esc(j.title || j.prompt_id)}</div>
+        <div class="job-sub"><span>#${j.number || '-'}</span><span>${esc(statusTxt)}</span></div>
+      </div>
+    </article>`;
+  }).join('')}</div>`;
 }
 
-$("wake").onclick=async()=>{
- if($("wake").disabled)return;
- $("err").textContent="";$("wake").disabled=true;
- $("wicon").innerHTML=SVG_SPIN;$("wtext").textContent=t("starting_btn");
- try{await api("/_gate/wake",{method:"POST",body:JSON.stringify({profile:selectedProfileId})})}
- catch(e){$("err").textContent=e.message;$("wake").disabled=false;$("wicon").innerHTML=SVG_ZAP;$("wtext").textContent=t("wake_btn")}
+/* 4. Interactive Actions */
+$('wake-btn').onclick = async () => {
+  $('session-err').hidden = true;
+  $('wake-btn').disabled = true;
+  try {
+    await api('/_gate/wake', {method: 'POST', body: JSON.stringify({profile: $('profile-select').value})});
+  } catch (e) {
+    $('session-err').textContent = e.message;
+    $('session-err').hidden = false;
+    renderStatus();
+  }
 };
 
-$("stop").onclick=async()=>{
- if($("stop").disabled||(S&&S.can_stop===false))return;
- if(!confirm(t("stop_confirm")))return;
- try{await api("/_gate/stop",{method:"POST"})}catch(e){$("err").textContent=e.message}
+$('stop-btn').onclick = async () => {
+  if (!confirm('确认立即停止并释放 Colab GPU 算力吗？')) return;
+  $('session-err').hidden = true;
+  try {
+    await api('/_gate/stop', {method: 'POST'});
+  } catch (e) {
+    $('session-err').textContent = e.message;
+    $('session-err').hidden = false;
+  }
 };
 
-let panelConfirmTimer=null;
-function resetPanelStop(){
- if(panelConfirmTimer){clearTimeout(panelConfirmTimer);panelConfirmTimer=null;}
- const btn=$("panel-stop-btn"),txt=$("panel-stop-txt");
- if(btn){btn.classList.remove("confirming");btn.disabled=(S&&S.can_stop===false);}
- if(txt){txt.textContent=lang==="zh"?"关机 · 释放 GPU":"Stop · Release GPU";}
-}
-const pStopBtn=$("panel-stop-btn");
-if(pStopBtn){
- pStopBtn.onclick=async(e)=>{
-  e.stopPropagation();
-  const btn=$("panel-stop-btn"),txt=$("panel-stop-txt");
-  if(btn.disabled||(S&&S.can_stop===false))return;
-  if(!btn.classList.contains("confirming")){
-   btn.classList.add("confirming");
-   txt.textContent=lang==="zh"?"再次点击确认关机":"Confirm Stop?";
-   panelConfirmTimer=setTimeout(resetPanelStop,4000);
-   return;
-  }
-  if(panelConfirmTimer){clearTimeout(panelConfirmTimer);panelConfirmTimer=null;}
-  txt.textContent=lang==="zh"?"停机中...":"Stopping...";
-  btn.disabled=true;
-  try{await api("/_gate/stop",{method:"POST"})}
-  catch(err){alert(err.message);resetPanelStop();}
- };
-}
-document.addEventListener("pointerdown",e=>{
- if(panelConfirmTimer&&$("panel-stop-btn")&&!$("panel-stop-btn").contains(e.target))resetPanelStop();
-});
+$('extend-btn').onclick = async () => {
+  try { await api('/_gate/extend', {method: 'POST'}); showToast('已延长会话时间'); }
+  catch (e) { showToast(e.message); }
+};
 
-function connect(){
- const es=new EventSource("/_gate/events?cid="+encodeURIComponent(cid)+"&since="+lines);
- es.addEventListener("state",e=>{
-  const j=JSON.parse(e.data);
-  const prevCanStop=(S&&S.can_stop!=null)?S.can_stop:true;
-  S=Object.assign({you:S&&S.you,owner_only:S&&S.owner_only,can_stop:prevCanStop},j);
-  if(j.state!==lastSt){
-   api("/_gate/status?cid="+encodeURIComponent(cid)).then(fresh=>{S=Object.assign({},S||{},fresh);render()}).catch(()=>{});
-  }
-  render.lastSyncTime=Date.now();
-  render();
- });
- es.addEventListener("progress",e=>{if(S){S.progress=JSON.parse(e.data);render()}});
- es.addEventListener("log",e=>log(JSON.parse(e.data)));
- es.onerror=()=>{$("sub").textContent=t("reconnecting")}}
+$('tab-quick').onclick = () => {
+  $('tab-quick').classList.add('active'); $('tab-raw').classList.remove('active');
+  $('quick-form').hidden = false; $('raw-form').hidden = true;
+};
+$('tab-raw').onclick = () => {
+  $('tab-raw').classList.add('active'); $('tab-quick').classList.remove('active');
+  $('quick-form').hidden = true; $('raw-form').hidden = false;
+};
 
-// Initial paint (SSR zero-flicker or fallback)
-render.lastSyncTime=Date.now();
-renderCustomSelect();
-render();
-loadProfiles();
-connect();
-setInterval(render,1000);
-setInterval(()=>api("/_gate/status?cid="+encodeURIComponent(cid)).then(j=>{S=Object.assign({},S||{},j);render.lastSyncTime=Date.now();render()}).catch(()=>{}),10000);
+$('ref-file').onchange = () => {
+  $('denoise-wrap').hidden = !$('ref-file').files.length;
+};
+$('denoise-input').oninput = () => {
+  $('denoise-val').textContent = Number($('denoise-input').value).toFixed(2);
+};
+
+$('quick-form').onsubmit = async (ev) => {
+  ev.preventDefault();
+  $('job-err').hidden = true;
+  const prompt = $('prompt-input').value.trim();
+  if (!prompt) return;
+  const btn = $('submit-quick-btn');
+  btn.disabled = true;
+  try {
+    let refName = '';
+    const f = $('ref-file').files[0];
+    if (f) {
+      const fd = new FormData();
+      fd.append('image', f);
+      fd.append('overwrite', 'true');
+      const up = await api('/upload/image', {method: 'POST', body: fd});
+      refName = up.name;
+    }
+    const [w, h] = $('size-select').value.split('x').map(Number);
+    const needWake = !S || (S.state !== 'ready');
+    const res = await api('/_gate/txt2img', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt,
+        negative_prompt: $('neg-input').value.trim(),
+        preset: $('preset-select').value,
+        width: w || 1024,
+        height: h || 1024,
+        seed: Number($('seed-input').value || -1),
+        reference_image: refName,
+        denoise: Number($('denoise-input').value || 0.65),
+        profile: $('profile-select').value,
+        auto_wake: needWake
+      })
+    });
+    if (res.job) {
+      jobsMap.set(res.job.prompt_id, res.job);
+      renderJobs();
+    }
+    showToast('任务已入队');
+  } catch (e) {
+    $('job-err').textContent = e.message;
+    $('job-err').hidden = false;
+  } finally {
+    renderStatus();
+  }
+};
+
+$('raw-form').onsubmit = async (ev) => {
+  ev.preventDefault();
+  $('job-err').hidden = true;
+  let parsed;
+  try {
+    parsed = JSON.parse($('raw-json-input').value);
+  } catch (e) {
+    $('job-err').textContent = 'JSON 语法错误: ' + e.message;
+    $('job-err').hidden = false;
+    return;
+  }
+  try {
+    const needWake = !S || (S.state !== 'ready');
+    const res = await api('/prompt', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt: parsed.prompt || parsed,
+        profile: $('profile-select').value,
+        auto_wake: needWake
+      })
+    });
+    showToast(`工作流已提交 (${res.prompt_id})`);
+    await refreshJobs();
+  } catch (e) {
+    $('job-err').textContent = e.message;
+    $('job-err').hidden = false;
+  }
+};
+
+async function refreshJobs() {
+  try {
+    const res = await api('/_gate/jobs');
+    jobsMap.clear();
+    (res.jobs || []).forEach(j => jobsMap.set(j.prompt_id, j));
+    renderJobs();
+  } catch (e) {}
+}
+$('refresh-jobs-btn').onclick = refreshJobs;
+
+/* 5. Account & Agent Token Modal */
+async function loadTokens() {
+  const el = $('tokens-list');
+  try {
+    const res = await api('/api/agent-tokens');
+    const list = res.tokens || [];
+    if (!list.length) {
+      el.innerHTML = '<div class="subtext">暂无已签发令牌。</div>';
+      return;
+    }
+    el.innerHTML = list.map(t => `<div class="token-row">
+      <div style="min-width:0">
+        <div style="font-weight:600;font-size:13px">${esc(t.name)} <code style="font:11px var(--mono);color:var(--muted)">${esc(t.token_prefix || 'sk_agent_')}…</code></div>
+        <div style="font-size:11px;color:var(--muted)">创建: ${new Date(t.created_at * 1000).toLocaleDateString()}</div>
+      </div>
+      <button type="button" class="btn btn-sm btn-danger" data-revoke="${esc(t.id)}">吊销</button>
+    </div>`).join('');
+    el.querySelectorAll('[data-revoke]').forEach(b => {
+      b.onclick = async () => {
+        const id = b.getAttribute('data-revoke');
+        if (!confirm('确认吊销此 Agent 令牌吗？')) return;
+        await api(`/api/agent-tokens/${encodeURIComponent(id)}`, {method: 'DELETE'});
+        loadTokens();
+      };
+    });
+  } catch (e) {
+    el.innerHTML = `<div class="subtext" style="color:var(--danger)">${esc(e.message)}</div>`;
+  }
+}
+
+$('account-btn').onclick = () => {
+  $('minted-box').hidden = true;
+  $('account-modal').hidden = false;
+  loadTokens();
+};
+$('close-modal-btn').onclick = () => { $('account-modal').hidden = true; };
+$('account-modal').onclick = (e) => { if (e.target === $('account-modal')) $('account-modal').hidden = true; };
+
+$('mint-token-btn').onclick = async () => {
+  const name = $('new-token-name').value.trim() || 'AI Agent';
+  try {
+    const res = await api('/api/agent-tokens', {method: 'POST', body: JSON.stringify({name})});
+    $('minted-token-text').textContent = res.token;
+    $('minted-box').hidden = false;
+    $('new-token-name').value = '';
+    loadTokens();
+  } catch (e) {
+    showToast(e.message);
+  }
+};
+$('copy-minted-btn').onclick = () => copyText($('minted-token-text').textContent);
+
+/* 6. Live SSE Stream */
+let cid = sessionStorage.getItem('kit.cid');
+if (!cid) { cid = Math.random().toString(36).slice(2); sessionStorage.setItem('kit.cid', cid); }
+
+function appendLog(line) {
+  const pre = $('log-pre');
+  pre.textContent += line + '\n';
+  if (pre.textContent.length > 50000) pre.textContent = pre.textContent.slice(-35000);
+  logLines += 1;
+  $('log-count').textContent = `${logLines} 行`;
+  pre.scrollTop = pre.scrollHeight;
+}
+
+function connectSSE() {
+  const es = new EventSource(`/_gate/events?cid=${encodeURIComponent(cid)}&since=${logLines}`);
+  es.addEventListener('state', e => {
+    const next = JSON.parse(e.data);
+    S = Object.assign({}, S || {}, next);
+    renderStatus();
+  });
+  es.addEventListener('progress', e => {
+    if (S) { S.progress = JSON.parse(e.data); renderStatus(); }
+  });
+  es.addEventListener('job', e => {
+    const job = JSON.parse(e.data);
+    jobsMap.set(job.prompt_id, job);
+    renderJobs();
+  });
+  es.addEventListener('log', e => appendLog(JSON.parse(e.data)));
+}
+
+renderSelectors();
+renderStatus();
+renderJobs();
+connectSSE();
+setInterval(() => {
+  api(`/_gate/status?cid=${encodeURIComponent(cid)}`).then(fresh => { S = fresh; renderStatus(); }).catch(() => {});
+}, 15000);
 </script>
 </body>
 </html>

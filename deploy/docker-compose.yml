@@ -1,39 +1,34 @@
-# Run from the repo root:  docker compose -f deploy/docker-compose.yml up -d
-# Joins the network of your existing Caddy so Caddy can reach comfy-gate:8080.
+# Optional container deployment (native systemd via deploy/comfy-gate.service is preferred on VPS).
 name: comfy-colab-kit
 services:
   comfy-gate:
     build: {context: .., dockerfile: deploy/Dockerfile}
     image: comfy-colab-kit/gate:local
-    container_name: comfy-gate       # Caddy upstream = container_name (stable DNS, see vps-maintain §2.3)
+    container_name: comfy-gate
     restart: unless-stopped
     env_file: ../.env
     environment:
       HOME: /data/home
       PYTHONPATH: /app/apps
     volumes:
-      - ../data:/data                  # state (session.json, cu_ledger.json) + colab CLI login; owner 10001, mode 700
-      # content is bind-mounted read-only, NOT baked: `git pull` applies it, no rebuild/restart
-      # (profiles are re-read on every wake). Only gate/ code changes need `up -d --build`.
+      - ../data:/data
       - ../apps/gate:/app/apps/gate:ro
-      - ../profiles:/app/profiles:ro         # profiles (built-in examples + user custom)
-      - ../packages/colab:/app/packages/colab:ro  # colab/setup.py, shipped to the VM on each wake
-      - ../apps/gate/web:/app/apps/gate/web:ro    # static web assets (index.html, bg.js, etc.)
-    secrets: [cf_service.json, colab_tunnel_token, agent_token, hf_token]
+      - ../profiles:/app/profiles:ro
+      - ../packages/colab:/app/packages/colab:ro
+      - ../apps/gate/web:/app/apps/gate/web:ro
+    secrets: [agent_token, hf_token]
     networks: [caddy]
-    expose: ["8080"]               # no host ports; reached only via the Caddy network
+    expose: ["8080"]
     read_only: true
     tmpfs: [/tmp]
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
 
 secrets:
-  cf_service.json: {file: ../secrets/cf_service.json}
-  colab_tunnel_token: {file: ../secrets/colab_tunnel_token}
   agent_token: {file: ../secrets/agent_token}
   hf_token: {file: ../secrets/hf_token}
 
 networks:
   caddy:
     external: true
-    name: ${CADDY_NETWORK:-caddy}   # existing reverse proxy network on the VPS (default: caddy)
+    name: ${CADDY_NETWORK:-caddy}

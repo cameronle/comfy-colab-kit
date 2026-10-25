@@ -1,0 +1,28 @@
+# Native systemd unit (recommended over Docker on low-memory VPS hosts).
+# Install:
+#   uv venv /opt/comfy-colab-kit/venv --python /usr/local/bin/python3
+#   uv pip install --python /opt/comfy-colab-kit/venv/bin/python -e /opt/comfy-colab-kit
+#   sudo cp deploy/comfy-gate.service /etc/systemd/system/comfy-gate.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now comfy-gate
+
+[Unit]
+Description=Comfy Colab Kit Headless Batch Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/opt/comfy-colab-kit
+EnvironmentFile=/opt/comfy-colab-kit/.env
+ExecStart=/opt/comfy-colab-kit/venv/bin/python -m gate.app
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

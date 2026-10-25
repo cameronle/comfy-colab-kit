@@ -15,9 +15,9 @@ class Snapshot:
     state: State
     state_since: float
     session_started: float | None
-    last_activity: float  # last HTTP request or ws client message
-    queue_busy: bool  # ComfyUI queue non-empty
-    open_clients: int  # connected ws clients (tabs)
+    last_activity: float  # last batch job submission/completion or wake
+    queue_busy: bool  # batch job running or queued
+    open_clients: int  # connected SSE clients (tabs)
     clients_zero_since: float | None
     extends_used: int
     cu_today: float
@@ -49,7 +49,9 @@ def admit_wake(cfg: AutoStop, now: float, cu_today: float, cu_month: float, cu_b
         return False, "daily_budget"
     if cfg.monthly_cu_budget and cu_month >= cfg.monthly_cu_budget:
         return False, "monthly_budget"
-    if cu_balance is not None and cu_balance < cfg.min_cu_balance:
+    if cfg.require_cu_balance and cu_balance is None:
+        return False, "unknown_balance"
+    if cu_balance is not None and cu_balance <= cfg.min_cu_balance:
         return False, "low_balance"
     return True, ""
 
@@ -69,7 +71,7 @@ def evaluate(cfg: AutoStop, s: Snapshot) -> Decision:
         return Decision(True, "daily_budget")
     if cfg.monthly_cu_budget and s.cu_month >= cfg.monthly_cu_budget:
         return Decision(True, "monthly_budget")
-    if s.cu_balance is not None and s.cu_balance < cfg.min_cu_balance:
+    if s.cu_balance is not None and s.cu_balance <= cfg.min_cu_balance:
         return Decision(True, "low_balance")
     remaining = None
     if s.session_started is not None:
@@ -81,10 +83,14 @@ def evaluate(cfg: AutoStop, s: Snapshot) -> Decision:
     if not s.queue_busy:
         if cfg.idle_timeout_min and s.now - s.last_activity >= cfg.idle_timeout_min * 60:
             return Decision(True, "idle", remaining_s=remaining)
-        if (cfg.stop_on_page_close_min and s.open_clients == 0 and s.clients_zero_since is not None
-                and (s.now - s.state_since >= 180)
-                and (s.now - s.last_activity >= 60)
-                and s.now - s.clients_zero_since >= cfg.stop_on_page_close_min * 60):
+        if (
+            cfg.stop_on_page_close_min
+            and s.open_clients == 0
+            and s.clients_zero_since is not None
+            and (s.now - s.state_since >= 180)
+            and (s.now - s.last_activity >= 60)
+            and s.now - s.clients_zero_since >= cfg.stop_on_page_close_min * 60
+        ):
             return Decision(True, "page_closed", remaining_s=remaining)
     warn = ""
     if remaining is not None and remaining <= cfg.warn_before_min * 60:

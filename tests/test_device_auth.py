@@ -1,5 +1,7 @@
-"""Tests for SQLite database layer and RFC 8628 Device Authorization flow."""
+"""Tests for SQLite SHA-256 hashed tokens and RFC 8628 Device Authorization flow."""
+import sqlite3
 from pathlib import Path
+
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -12,54 +14,52 @@ from tests.fakes import FakeColab
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_gate_db_device_flow(tmp_path):
+def test_gate_db_device_flow_zero_plaintext(tmp_path):
     db_file = tmp_path / "test_gate.db"
     db = GateDB(db_file)
 
-    # 1. Create device code
     code_info = db.create_device_code(client_name="Test-Cursor", expires_in_sec=60)
     dev_code = code_info["device_code"]
     user_code = code_info["user_code"]
-    assert dev_code.startswith("dev_")
-    assert "-" in user_code
+    assert dev_code.startswith("dev_") and "-" in user_code
 
-    # 2. Poll while pending
-    poll1 = db.poll_device_token(dev_code)
-    assert poll1["status"] == "pending"
+    assert db.poll_device_token(dev_code)["status"] == "pending"
 
-    # 3. Approve device code
     app_res = db.approve_device_code(user_code, email="alice@example.com", token_name="Cursor-Mac")
-    raw_token = app_res["token"]
-    assert raw_token.startswith("sk_agent_")
-    assert app_res["email"] == "alice@example.com"
+    assert "token" not in app_res  # Not minted until consumed in memory
 
-    # 4. Poll after approved
     poll2 = db.poll_device_token(dev_code)
     assert poll2["status"] == "approved"
-    assert poll2["access_token"] == raw_token
+    raw_token = poll2["access_token"]
+    assert raw_token.startswith("sk_agent_")
     assert poll2["email"] == "alice@example.com"
 
-    # 5. Verify token works
-    verified = db.verify_token(raw_token)
-    assert verified is not None
-    assert verified["email"] == "alice@example.com"
-    assert verified["name"] == "Cursor-Mac"
+    # Re-polling an already consumed device code must not return another token
+    assert db.poll_device_token(dev_code)["status"] == "consumed"
 
-    # 6. List tokens
+    # Verify raw token is NEVER stored anywhere in SQLite on disk
+    db_bytes = db_file.read_bytes() + (
+        (tmp_path / "test_gate.db-wal").read_bytes() if (tmp_path / "test_gate.db-wal").exists() else b""
+    )
+    assert raw_token.encode() not in db_bytes
+    with sqlite3.connect(db_file) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_tokens)").fetchall()}
+        assert "token_plain" not in cols
+
+    verified = db.verify_token(raw_token)
+    assert verified is not None and verified["email"] == "alice@example.com"
+
     tokens = db.list_tokens(email="alice@example.com")
     assert len(tokens) == 1
-    assert tokens[0]["name"] == "Cursor-Mac"
-    assert not tokens[0]["revoked"]
+    assert "token" not in tokens[0]
+    assert tokens[0]["token_prefix"] == raw_token[:15]
 
-    # 7. Revoke token
-    ok = db.revoke_token(tokens[0]["id"], email="alice@example.com")
-    assert ok is True
-    # Now verify should fail
+    assert db.revoke_token(tokens[0]["id"], email="alice@example.com") is True
     assert db.verify_token(raw_token) is None
 
 
 @pytest.mark.asyncio
-async def test_device_auth_endpoints(tmp_path):
+async def test_device_auth_endpoints_and_security_guards(tmp_path):
     settings = Settings.from_env({
         "STATE_DIR": str(tmp_path),
         "AUTH_DISABLED": "true",
@@ -72,89 +72,55 @@ async def test_device_auth_endpoints(tmp_path):
     await client.start_server()
 
     try:
-        # Step 1: Request device code
+        # 1. Reflected XSS payload in /auth/device?code= must be HTML-escaped
+        xss = '"><svg onload=alert(1)>'
+        html_res = await client.get("/auth/device", params={"code": xss})
+        html_text = await html_res.text()
+        assert html_res.status == 200
+        assert "<svg onload=" not in html_text.lower()
+        assert "&quot;&gt;&lt;SVG" in html_text
+
+        # 2. Device code pairing
         res = await client.post("/api/auth/device/code", json={"client_name": "Cursor"})
-        assert res.status == 200
         data = await res.json()
-        assert "device_code" in data
-        assert "user_code" in data
-        user_code = data["user_code"]
-        dev_code = data["device_code"]
+        user_code, dev_code = data["user_code"], data["device_code"]
 
-        # Step 2: Poll pending
         res = await client.post("/api/auth/device/token", json={"device_code": dev_code})
-        assert res.status == 400
-        assert (await res.json())["error"] == "authorization_pending"
+        assert res.status == 400 and (await res.json())["error"] == "authorization_pending"
 
-        # Step 3: Approve code (runs as dev@localhost under AUTH_DISABLED)
         res = await client.post("/api/auth/device/approve", json={"user_code": user_code})
-        assert res.status == 200
-        assert (await res.json())["ok"] is True
+        assert res.status == 200 and (await res.json())["ok"] is True
 
-        # Step 4: Poll token (should now succeed)
         res = await client.post("/api/auth/device/token", json={"device_code": dev_code})
         assert res.status == 200
-        tok_data = await res.json()
-        assert "access_token" in tok_data
-        token = tok_data["access_token"]
-        assert token.startswith("sk_agent_")
+        token = (await res.json())["access_token"]
 
-        # Step 5: Call status using the bearer token
-        res = await client.get("/_gate/status", headers={"Authorization": f"Bearer {token}"})
-        assert res.status == 200
-        st_data = await res.json()
-        assert st_data["you"]["email"] == "dev@localhost"
+        # 3. Bearer token works for status, but CANNOT mint replacement tokens or approve device codes!
+        agent_hdr = {"Authorization": f"Bearer {token}"}
+        assert (await client.get("/_gate/status", headers=agent_hdr)).status == 200
 
-        # Step 6: List tokens
+        mint_attempt = await client.post("/api/agent-tokens", json={"name": "backdoor"}, headers=agent_hdr)
+        assert mint_attempt.status == 403
+        assert (await mint_attempt.json())["error"] == "human_auth_required"
+
+        list_attempt = await client.get("/api/agent-tokens", headers=agent_hdr)
+        assert list_attempt.status == 403
+
+        # 4. Human session can list metadata (no plaintext) and revoke
         res = await client.get("/api/agent-tokens")
-        assert res.status == 200
         toks = (await res.json())["tokens"]
-        assert len(toks) >= 1
+        assert len(toks) == 1 and "token" not in toks[0]
         tid = toks[0]["id"]
 
-        # Step 7: Revoke token
         res = await client.post(f"/api/agent-tokens/{tid}/revoke")
         assert res.status == 200
-        assert (await res.json())["ok"] is True
+        assert (await client.get("/_gate/status", headers=agent_hdr)).status == 401
 
-        # Step 8: Token is now rejected
-        res = await client.get("/_gate/status", headers={"Authorization": f"Bearer {token}"})
-        assert res.status == 401
-
-        # Step 9: Test direct token creation (web UI flow without ckit)
-        res = await client.post("/api/agent-tokens", json={"name": "Cursor-Direct"})
+        # 5. Direct one-time token issuance from human browser session
+        res = await client.post("/api/agent-tokens", json={"name": "Hermes-Agent"})
         assert res.status == 200
         dir_data = await res.json()
-        assert "token" in dir_data
-        assert dir_data["token"].startswith("sk_agent_")
-        assert dir_data["name"] == "Cursor-Direct"
-        assert dir_data["email"] == "dev@localhost"
-
-        # Verify direct token works
-        res = await client.get("/_gate/status", headers={"Authorization": f"Bearer {dir_data['token']}"})
-        assert res.status == 200
-
-        # Step 10: Test unused token reuse
-        res = await client.post("/api/agent-tokens", json={"name": "Cursor-Unused", "force": True})
-        assert res.status == 200
-        unused_tok = (await res.json())["token"]
-
-        # Calling without force should reuse unused_tok
-        res = await client.post("/api/agent-tokens", json={"name": "Cursor-Copy", "force": False})
-        assert res.status == 200
-        reused_data = await res.json()
-        assert reused_data["token"] == unused_tok
-        assert reused_data["reused"] is True
-
-        # Now use the token
-        res = await client.get("/_gate/status", headers={"Authorization": f"Bearer {unused_tok}"})
-        assert res.status == 200
-
-        # After use, a new token is created
-        res = await client.post("/api/agent-tokens", json={"name": "Cursor-Next", "force": False})
-        assert res.status == 200
-        next_data = await res.json()
-        assert next_data["token"] != unused_tok
-        assert next_data["reused"] is False
+        assert dir_data["token"].startswith("sk_agent_") and dir_data["one_time"] is True
+        assert (await client.get("/_gate/status", headers={"Authorization": f"Bearer {dir_data['token']}"})).status == 200
     finally:
         await client.close()

@@ -12,9 +12,6 @@ def build_plan(profile: Profile, settings: Settings, workflow_ids: list[str] | N
     unknown = [w for w in wf_ids if w not in profile.workflows]
     if unknown:
         raise ValueError(f"unknown workflows {unknown}")
-    # Only the default workflow's (and the smoke test's) models are downloaded on wake, as core. Other installed
-    # workflows' models are opt-in: explicitly requested workflows and `prefetch: true` ones download in the
-    # background; everything else is fetched on demand (POST /_gate/fetch -> build_fetch_plan).
     requested = set(workflow_ids or [])
     eager = [w for w in wf_ids if w in requested or profile.workflows[w].prefetch]
     default_models = profile.models_for([profile.app_default]) if profile.app_default else []
@@ -45,35 +42,59 @@ def build_plan(profile: Profile, settings: Settings, workflow_ids: list[str] | N
             "extra_model_paths": profile.extra_model_paths,
         },
         "models": [
-            {"id": m.id, "dest": m.dest, "url": hf_to_https(m.url), "sha256": m.sha256,
-             "size_gb": m.size_gb, "core": m.core or m.id in default_core}
+            {
+                "id": m.id,
+                "dest": m.dest,
+                "url": hf_to_https(m.url),
+                "sha256": m.sha256,
+                "size_gb": m.size_gb,
+                "core": m.core or m.id in default_core,
+            }
             for m in models.values()
         ],
         "custom_nodes": [
-            {"id": n, "url": profile.custom_nodes[n].url, "ref": profile.custom_nodes[n].ref,
-             "subdir": profile.custom_nodes[n].subdir}
+            {
+                "id": n,
+                "url": profile.custom_nodes[n].url,
+                "ref": profile.custom_nodes[n].ref,
+                "subdir": profile.custom_nodes[n].subdir,
+            }
             for n in node_ids
         ],
         "workflows": [
-            {"id": w.id, "title": w.title, "url": hf_to_https(w.url) if w.url else None,
-             "inline": (profile.path / w.file).read_text() if w.file else None, "format": w.format,
-             "loras": [hf_to_https(u) for u in w.loras],
-             "app_inputs": [list(x) for x in w.app_inputs], "app_outputs": list(w.app_outputs),
-             "overrides": list(w.overrides), "default": w.id == profile.app_default}
+            {
+                "id": w.id,
+                "title": w.title,
+                "url": hf_to_https(w.url) if w.url else None,
+                "inline": (profile.path / w.file).read_text() if w.file else None,
+                "format": w.format,
+                "loras": [hf_to_https(u) for u in w.loras],
+                "app_inputs": [list(x) for x in w.app_inputs],
+                "app_outputs": list(w.app_outputs),
+                "overrides": list(w.overrides),
+                "default": w.id == profile.app_default,
+            }
             for w in (profile.workflows[i] for i in wf_ids)
         ],
-        "on_demand": {w: [m.id for m in profile.models_for([w]) if m.id not in models]
-                      for w in wf_ids if any(m.id not in models for m in profile.models_for([w]))},
-        "smoke": ({"api_url": hf_to_https(profile.smoke.api_url), "timeout_s": profile.smoke.timeout_s}
-                  if settings.enable_smoke_test and profile.smoke else None),
-        "model_aliases": {f: profile.models[mid].dest.rsplit("/", 1)[-1]
-                          for f, mid in profile.model_aliases.items()},
+        "on_demand": {
+            w: [m.id for m in profile.models_for([w]) if m.id not in models]
+            for w in wf_ids
+            if any(m.id not in models for m in profile.models_for([w]))
+        },
+        "smoke": (
+            {"api_url": hf_to_https(profile.smoke.api_url), "timeout_s": profile.smoke.timeout_s}
+            if settings.enable_smoke_test and profile.smoke
+            else None
+        ),
+        "model_aliases": {
+            f: profile.models[mid].dest.rsplit("/", 1)[-1]
+            for f, mid in profile.model_aliases.items()
+        },
         "default_view": settings.default_view,
         "fast_start": settings.fast_start,
         "download_concurrency": settings.download_concurrency,
         "xet_high_performance": settings.xet_high_performance,
         "pip_installer": settings.pip_installer,
-        "watchdog_gate_lost_min": settings.auto_stop.watchdog_gate_lost_min,
         "max_session_hours": settings.auto_stop.max_session_hours
         + settings.auto_stop.extend_max_times * settings.auto_stop.extend_hours,
     }

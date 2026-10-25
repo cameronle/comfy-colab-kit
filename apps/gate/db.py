@@ -1,19 +1,18 @@
 """SQLite database layer for Comfy Colab Kit gate.
 
-Manages agent tokens, RFC 8628 device codes, and dynamic owners.
-Database is stored in STATE_DIR / "gate.db" with WAL mode for concurrency.
+Manages SHA-256 hashed agent tokens, RFC 8628 device codes, and dynamic owners.
+Plaintext bearer tokens are NEVER stored on disk in SQLite; they are generated
+and returned once in memory at issuance time.
 """
 from __future__ import annotations
 
 import hashlib
-import os
-import random
 import secrets
 import sqlite3
-import string
 import time
 from pathlib import Path
 from typing import Any
+
 from aiohttp import web
 
 DB_KEY = web.AppKey("db", object)
@@ -22,9 +21,16 @@ DB_KEY = web.AppKey("db", object)
 def _random_user_code() -> str:
     # 8-char base32-like alphabet (no confusing chars: 0/O, 1/I/L)
     chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    part1 = "".join(random.choice(chars) for _ in range(4))
-    part2 = "".join(random.choice(chars) for _ in range(4))
+    part1 = "".join(secrets.choice(chars) for _ in range(4))
+    part2 = "".join(secrets.choice(chars) for _ in range(4))
     return f"{part1}-{part2}"
+
+
+def _mint_raw_token() -> tuple[str, str, str]:
+    raw_token = f"sk_agent_{secrets.token_hex(24)}"
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    token_prefix = raw_token[:15]
+    return raw_token, token_hash, token_prefix
 
 
 class GateDB:
@@ -47,11 +53,11 @@ class GateDB:
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     token_hash TEXT NOT NULL UNIQUE,
+                    token_prefix TEXT NOT NULL DEFAULT '',
                     email TEXT NOT NULL,
                     created_at REAL NOT NULL,
                     last_used_at REAL,
-                    revoked INTEGER NOT NULL DEFAULT 0,
-                    token_plain TEXT
+                    revoked INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_tokens_hash ON agent_tokens(token_hash);
                 CREATE INDEX IF NOT EXISTS idx_tokens_email ON agent_tokens(email);
@@ -60,10 +66,10 @@ class GateDB:
                     device_code TEXT PRIMARY KEY,
                     user_code TEXT NOT NULL UNIQUE,
                     client_name TEXT,
+                    token_name TEXT,
                     email TEXT,
                     status TEXT NOT NULL DEFAULT 'pending',
                     token_id TEXT,
-                    token_plain TEXT,
                     created_at REAL NOT NULL,
                     expires_at REAL NOT NULL
                 );
@@ -75,10 +81,17 @@ class GateDB:
                     created_at REAL NOT NULL
                 );
             """)
-            try:
-                conn.execute("ALTER TABLE agent_tokens ADD COLUMN token_plain TEXT;")
-            except Exception:
-                pass
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(agent_tokens)").fetchall()}
+            if "token_prefix" not in cols:
+                conn.execute("ALTER TABLE agent_tokens ADD COLUMN token_prefix TEXT NOT NULL DEFAULT '';")
+            if "token_plain" in cols:
+                conn.execute("UPDATE agent_tokens SET token_plain = NULL WHERE token_plain IS NOT NULL;")
+
+            dev_cols = {r["name"] for r in conn.execute("PRAGMA table_info(device_codes)").fetchall()}
+            if "token_name" not in dev_cols:
+                conn.execute("ALTER TABLE device_codes ADD COLUMN token_name TEXT;")
+            if "token_plain" in dev_cols:
+                conn.execute("UPDATE device_codes SET token_plain = NULL WHERE token_plain IS NOT NULL;")
 
     # ── Device Code Authorization (RFC 8628) ──────────────────────────────────
     def create_device_code(self, client_name: str = "", expires_in_sec: int = 600) -> dict[str, Any]:
@@ -91,7 +104,7 @@ class GateDB:
             conn.execute(
                 """INSERT INTO device_codes (device_code, user_code, client_name, created_at, expires_at)
                    VALUES (?, ?, ?, ?, ?)""",
-                (device_code, user_code, client_name or "AI Agent", now, expires_at)
+                (device_code, user_code, client_name or "AI Agent", now, expires_at),
             )
 
         return {
@@ -114,10 +127,9 @@ class GateDB:
             return dict(row)
 
     def approve_device_code(self, user_code: str, email: str, token_name: str = "") -> dict[str, Any]:
+        """Record human approval without persisting any plaintext bearer secret to disk."""
         code = user_code.strip().upper()
         now = time.time()
-        raw_token = f"sk_agent_{secrets.token_hex(24)}"
-        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
         token_id = f"tok_{secrets.token_hex(6)}"
 
         with self._get_conn() as conn:
@@ -132,22 +144,16 @@ class GateDB:
 
             name = token_name or row["client_name"] or "AI Agent"
             conn.execute(
-                """INSERT INTO agent_tokens (id, name, token_hash, email, created_at, revoked, token_plain)
-                   VALUES (?, ?, ?, ?, ?, 0, ?)""",
-                (token_id, name, token_hash, email.lower(), now, raw_token)
-            )
-            conn.execute(
                 """UPDATE device_codes
-                   SET status = 'approved', email = ?, token_id = ?, token_plain = ?
+                   SET status = 'approved', email = ?, token_id = ?, token_name = ?
                    WHERE user_code = ?""",
-                (email.lower(), token_id, raw_token, code)
+                (email.lower(), token_id, name, code),
             )
 
         return {
             "token_id": token_id,
             "name": name,
             "email": email.lower(),
-            "token": raw_token,
         }
 
     def deny_device_code(self, user_code: str) -> bool:
@@ -155,11 +161,12 @@ class GateDB:
         with self._get_conn() as conn:
             cur = conn.execute(
                 "UPDATE device_codes SET status = 'denied' WHERE user_code = ? AND status = 'pending'",
-                (code,)
+                (code,),
             )
             return cur.rowcount > 0
 
     def poll_device_token(self, device_code: str) -> dict[str, Any]:
+        """Atomically exchange an approved device_code for a one-time in-memory bearer token."""
         now = time.time()
         with self._get_conn() as conn:
             row = conn.execute("SELECT * FROM device_codes WHERE device_code = ?", (device_code,)).fetchone()
@@ -171,15 +178,29 @@ class GateDB:
                     return {"status": "expired"}
                 return {"status": "pending"}
             if row["status"] == "approved":
-                token = row["token_plain"]
-                if token:
-                    # Clear token_plain immediately after first retrieval for security
-                    conn.execute("UPDATE device_codes SET token_plain = NULL WHERE device_code = ?", (device_code,))
+                if now > row["expires_at"]:
+                    conn.execute("UPDATE device_codes SET status = 'expired' WHERE device_code = ?", (device_code,))
+                    return {"status": "expired"}
+                cur = conn.execute(
+                    "UPDATE device_codes SET status = 'consumed' WHERE device_code = ? AND status = 'approved'",
+                    (device_code,),
+                )
+                if cur.rowcount != 1:
+                    return {"status": "consumed"}
+                raw_token, token_hash, token_prefix = _mint_raw_token()
+                token_id = row["token_id"] or f"tok_{secrets.token_hex(6)}"
+                name = row["token_name"] or row["client_name"] or "AI Agent"
+                email = (row["email"] or "").lower()
+                conn.execute(
+                    """INSERT INTO agent_tokens (id, name, token_hash, token_prefix, email, created_at, revoked)
+                       VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                    (token_id, name, token_hash, token_prefix, email, now),
+                )
                 return {
                     "status": "approved",
-                    "access_token": token,
-                    "token_id": row["token_id"],
-                    "email": row["email"],
+                    "access_token": raw_token,
+                    "token_id": token_id,
+                    "email": email,
                 }
             return {"status": row["status"]}
 
@@ -191,61 +212,45 @@ class GateDB:
             else:
                 rows = conn.execute(
                     "SELECT * FROM agent_tokens WHERE email = ? AND revoked = 0 ORDER BY created_at DESC",
-                    (email.lower(),)
+                    (email.lower(),),
                 ).fetchall()
             return [
                 {
                     "id": r["id"],
                     "name": r["name"],
                     "email": r["email"],
+                    "token_prefix": r["token_prefix"] if "token_prefix" in r.keys() else "",
                     "created_at": r["created_at"],
                     "last_used_at": r["last_used_at"],
                     "revoked": bool(r["revoked"]),
-                    "token": r["token_plain"] if "token_plain" in r.keys() and r["token_plain"] else "",
                 }
                 for r in rows
             ]
 
-    def create_direct_token(self, email: str, name: str, force_new: bool = False) -> dict[str, Any]:
+    def create_direct_token(self, email: str, name: str) -> dict[str, Any]:
+        """Issue a fresh one-time bearer token; only its SHA-256 hash is stored on disk."""
         norm_email = email.lower()
         now = time.time()
+        raw_token, token_hash, token_prefix = _mint_raw_token()
+        token_id = f"tok_{secrets.token_hex(6)}"
+        clean_name = name or "AI Agent"
+
         with self._get_conn() as conn:
-            if not force_new:
-                existing = conn.execute(
-                    """SELECT * FROM agent_tokens
-                       WHERE email = ? AND revoked = 0 AND last_used_at IS NULL AND token_plain IS NOT NULL AND token_plain != ''
-                       ORDER BY created_at DESC LIMIT 1""",
-                    (norm_email,)
-                ).fetchone()
-                if existing:
-                    return {
-                        "id": existing["id"],
-                        "token_id": existing["id"],
-                        "name": existing["name"],
-                        "email": existing["email"],
-                        "token": existing["token_plain"],
-                        "created_at": existing["created_at"],
-                        "reused": True,
-                    }
-
-            raw_token = f"sk_agent_{secrets.token_hex(24)}"
-            token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-            token_id = f"tok_{secrets.token_hex(6)}"
-
             conn.execute(
-                """INSERT INTO agent_tokens (id, name, token_hash, email, created_at, revoked, token_plain)
-                   VALUES (?, ?, ?, ?, ?, 0, ?)""",
-                (token_id, name or "AI Agent", token_hash, norm_email, now, raw_token)
+                """INSERT INTO agent_tokens (id, name, token_hash, token_prefix, email, created_at, revoked)
+                   VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                (token_id, clean_name, token_hash, token_prefix, norm_email, now),
             )
 
         return {
             "id": token_id,
             "token_id": token_id,
-            "name": name,
+            "name": clean_name,
             "email": norm_email,
             "token": raw_token,
+            "token_prefix": token_prefix,
             "created_at": now,
-            "reused": False,
+            "one_time": True,
         }
 
     def delete_token(self, token_id: str, email: str, is_owner: bool = False) -> bool:
@@ -255,7 +260,7 @@ class GateDB:
             else:
                 cur = conn.execute(
                     "DELETE FROM agent_tokens WHERE id = ? AND email = ?",
-                    (token_id, email.lower())
+                    (token_id, email.lower()),
                 )
             return cur.rowcount > 0
 
@@ -270,7 +275,7 @@ class GateDB:
         with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT * FROM agent_tokens WHERE token_hash = ? AND revoked = 0",
-                (token_hash,)
+                (token_hash,),
             ).fetchone()
             if not row:
                 return None
@@ -296,7 +301,7 @@ class GateDB:
         with self._get_conn() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO dynamic_owners (email, added_by, created_at) VALUES (?, ?, ?)",
-                (norm, added_by.lower(), time.time())
+                (norm, added_by.lower(), time.time()),
             )
             return True
 
