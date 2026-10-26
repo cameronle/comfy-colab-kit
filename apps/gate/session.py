@@ -338,6 +338,10 @@ class Session:
             if self.machine.state in (State.SLEEPING, State.FAILED):
                 self.reload_profiles()
             m = self.machine
+            if profile_id and profile_id not in self.profiles:
+                raise KeyError(profile_id)
+            if m.state != State.SLEEPING and profile_id and profile_id != m.profile:
+                return WakeResult(False, m.state.value, m.profile, refused="profile_mismatch")
             if m.state not in (State.SLEEPING, State.FAILED):
                 return WakeResult(True, m.state.value, m.profile)
             pid = profile_id or self.settings.default_profile
@@ -412,6 +416,8 @@ class Session:
         if profile_id not in self.profiles:
             raise KeyError(profile_id)
         async with self.lock:
+            if self.queue_busy:
+                return WakeResult(False, self.machine.state.value, self.machine.profile, refused="queue_busy")
             if self.machine.state == State.READY:
                 self.machine.to(State.SWITCHING, f"switch to {profile_id} by {by or ip}")
                 await self._stop_locked(f"switch to {profile_id}")

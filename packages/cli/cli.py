@@ -266,25 +266,23 @@ def do_generate(a):
         print("[generate] Hint: run 'ckit wake --wait' first to allocate and start the GPU.", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        from .moss_template import make_moss_txt2img_graph
-    except ImportError:
-        try:
-            from cli.moss_template import make_moss_txt2img_graph
-        except ImportError:
-            from moss_template import make_moss_txt2img_graph
+    body = {
+        "prompt": prompt_text, "profile": a.profile or st.get("profile"),
+        "seed": a.seed if a.seed is not None else -1,
+        "width": a.width, "height": a.height, "timeout_seconds": a.timeout,
+    }
+    if a.negative is not None:
+        body["negative_prompt"] = a.negative
+    if a.preset is not None:
+        body["preset"] = a.preset
+    if a.workflow:
+        if len(a.workflow) != 1:
+            print("[generate] Select exactly one --workflow for quick generation.", file=sys.stderr)
+            sys.exit(1)
+        body["workflow"] = a.workflow[0]
 
-    graph = make_moss_txt2img_graph(
-        prompt=prompt_text,
-        negative_prompt=a.negative or "worst quality, bad anatomy, watermark, jpeg artifact",
-        preset=a.preset or "Fast alt · fix + darask0 0.35 · 10 steps",
-        seed=a.seed if a.seed is not None else -1,
-        width=a.width or 1024,
-        height=a.height or 1024,
-    )
-
-    print(f"[generate] Submitting prompt to ComfyUI (preset: {graph['1']['inputs']['choice']}) ...")
-    p_code, p_out = call("POST", "/prompt", {"prompt": graph})
+    print(f"[generate] Submitting prompt for profile {body['profile']} ...")
+    p_code, p_out = call("POST", "/_gate/txt2img", body)
     if p_code >= 400 or "prompt_id" not in p_out:
         print(f"[generate] Prompt submission failed ({p_code}): {json.dumps(p_out, ensure_ascii=False)}", file=sys.stderr)
         sys.exit(1)

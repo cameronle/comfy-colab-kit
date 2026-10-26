@@ -275,14 +275,19 @@ async def status(request: web.Request) -> web.Response:
     })
 
 
-async def profiles_route(request: web.Request) -> web.Response:
+def _profile_catalog(request: web.Request) -> dict:
+    from .generation import capabilities
     _, presets = _load_moss_builder()
-    return web.json_response({
+    return {
         "default": request.app[SETTINGS].default_profile,
-        "profiles": [p.summary() for p in request.app[PROFILES].values()],
+        "profiles": [{**p.summary(), "generation": capabilities(p)} for p in request.app[PROFILES].values()],
         "presets": list(presets),
         "errors": request.app[PROFILE_ERRORS],
-    })
+    }
+
+
+async def profiles_route(request: web.Request) -> web.Response:
+    return web.json_response(_profile_catalog(request))
 
 
 async def wake(request: web.Request) -> web.Response:
@@ -407,6 +412,7 @@ async def prompt_route(request: web.Request) -> web.Response:
             prompt=prompt_graph,
             submitted_by=ident.email,
             title=str(body.get("title") or "API Workflow"),
+            profile_id=body.get("profile") or s.machine.profile or "",
             timeout_s=int(body.get("timeout_seconds") or 300),
             allow_booting=auto_wake or s.machine.is_booting,
         )
@@ -415,51 +421,48 @@ async def prompt_route(request: web.Request) -> web.Response:
     return web.json_response({"prompt_id": job.prompt_id, "number": job.number, "node_errors": {}})
 
 
-async def txt2img_route(request: web.Request) -> web.Response:
+async def _enqueue_generation(request: web.Request, body: dict):
     ident = _ident(request)
-    body = await _body(request)
-    prompt_text = str(body.get("prompt") or "").strip()
-    if not prompt_text:
-        return err(400, "missing_prompt", "Field 'prompt' is required")
-    auto_wake = bool(body.get("auto_wake", False))
     s = request.app[SESSION]
+    from .generation import GenerationError, build_generation
+
+    pid = body.get("profile") or s.machine.profile or request.app[SETTINGS].default_profile
+    if not isinstance(pid, str) or pid not in request.app[PROFILES]:
+        raise GenerationError(404, "unknown_profile", "Unknown profile")
+    generation = build_generation(request.app[PROFILES][pid], body)
+    if s.machine.state != State.SLEEPING and s.machine.profile != pid:
+        raise GenerationError(409, "profile_mismatch", "The active GPU uses a different profile; switch explicitly when idle")
+    if generation.parameters.get("reference_image"):
+        request.app[BATCH].resolve_view_file(generation.parameters["reference_image"], "input")
+    auto_wake = body.get("auto_wake", False)
     if auto_wake and s.machine.state in (State.SLEEPING, State.FAILED):
+        authorize(ident, "wake", request.app[SETTINGS])
         try:
-            authorize(ident, "wake", request.app[SETTINGS])
-        except AuthError as e:
-            return err(e.status, e.code, e.msg)
-        try:
-            res = await s.wake(body.get("profile"), by=ident.email, ip=get_client_ip(request))
+            res = await s.wake(pid, by=ident.email, ip=get_client_ip(request))
         except KeyError:
-            return err(404, "unknown_profile", "Unknown profile")
+            raise GenerationError(404, "unknown_profile", "Unknown profile") from None
         if res.refused:
-            return err(409, res.refused, f"wake refused: {res.refused}")
+            raise GenerationError(409, res.refused, f"wake refused: {res.refused}")
 
-    make_graph, _ = _load_moss_builder()
-    preset = str(body.get("preset") or "Fast alt · fix + darask0 0.35 · 10 steps")
-    graph = make_graph(
-        prompt=prompt_text,
-        negative_prompt=str(body.get("negative_prompt") or "worst quality, bad anatomy, watermark, jpeg artifact"),
-        preset=preset,
-        seed=int(body.get("seed")) if body.get("seed") is not None else -1,
-        width=int(body.get("width") or 1024),
-        height=int(body.get("height") or 1024),
-    )
-    ref_image = str(body.get("reference_image") or "").strip()
-    if ref_image:
-        graph = _inject_reference_image(graph, ref_image, denoise=float(body.get("denoise") or 0.65))
-
-    try:
-        job = request.app[BATCH].enqueue(
-            prompt=graph,
+    return request.app[BATCH].enqueue(
+            prompt=generation.graph,
             submitted_by=ident.email,
-            title=prompt_text[:80],
-            preset=preset,
-            timeout_s=int(body.get("timeout_seconds") or 300),
+            title=body["prompt"][:80],
+            preset=generation.preset,
+            profile_id=generation.profile_id,
+            workflow_id=generation.workflow_id,
+            parameters=generation.parameters,
+            timeout_s=generation.timeout_s,
             allow_booting=auto_wake or s.machine.is_booting,
-        )
-    except BatchError as be:
-        return err(be.status, be.code, be.msg)
+    )
+
+
+async def txt2img_route(request: web.Request) -> web.Response:
+    from .generation import GenerationError
+    try:
+        job = await _enqueue_generation(request, await _body(request))
+    except (AuthError, BatchError, GenerationError) as e:
+        return err(e.status, e.code, e.msg)
     return web.json_response({"prompt_id": job.prompt_id, "number": job.number, "job": job.to_summary()}, status=202)
 
 
@@ -508,6 +511,7 @@ async def interrupt_route(request: web.Request) -> web.Response:
 
 # ── Model Context Protocol (HTTP Streamable JSON-RPC 2.0) ────────────────────
 async def mcp_endpoint(request: web.Request) -> web.Response:
+    from ckit.mcp_server import TOOLS
     origin = request.headers.get("Origin")
     if origin and origin != f"https://{request.app[SETTINGS].public_host}":
         return err(403, "invalid_origin", "Cross-origin MCP requests are not allowed")
@@ -519,7 +523,7 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
             "version": __version__,
             "mode": "batch",
             "protocol": "2025-03-26",
-            "tools": ["gate_status", "gate_wake", "gate_txt2img", "gate_generate", "gate_stop"],
+            "tools": ["gate_status", "gate_profiles", "gate_wake", "gate_txt2img", "gate_generate", "gate_stop"],
         })
     if request.method != "POST":
         raise web.HTTPMethodNotAllowed(request.method, ["POST"])
@@ -551,6 +555,7 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
             "id": req_id,
             "result": {
                 "tools": [
+                    next(t for t in TOOLS if t["name"] == "gate_profiles"),
                     {
                         "name": "gate_status",
                         "description": "Inspect the Comfy Colab batch session state, active profile, keep-warm timer, and CU balance.",
@@ -566,23 +571,7 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
                             },
                         },
                     },
-                    {
-                        "name": "gate_txt2img",
-                        "description": "Generate an image headlessly using the MOSS-Image DeBand batch pipeline.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "prompt": {"type": "string", "description": "Text description of the image to generate."},
-                                "negative_prompt": {"type": "string", "description": "Negative elements to avoid."},
-                                "preset": {"type": "string", "description": "Preset: 'Fast alt' (default), 'Fast', 'Balanced', 'Quality'."},
-                                "seed": {"type": "integer", "description": "Random seed (optional)."},
-                                "width": {"type": "integer", "description": "Image width (default 1024)."},
-                                "height": {"type": "integer", "description": "Image height (default 1024)."},
-                                "timeout_seconds": {"type": "integer", "description": "Max wait seconds (default 180)."},
-                            },
-                            "required": ["prompt"],
-                        },
-                    },
+                    next(t for t in TOOLS if t["name"] == "gate_txt2img"),
                     {
                         "name": "gate_generate",
                         "description": "Submit a raw ComfyUI API prompt graph to the headless batch runner and return output URLs.",
@@ -606,6 +595,10 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
     if method == "tools/call":
         tool_name = params.get("name")
         ident = _ident(request)
+        if tool_name == "gate_profiles":
+            return web.json_response({"jsonrpc": "2.0", "id": req_id, "result": {
+                "content": [{"type": "text", "text": json.dumps(_profile_catalog(request), ensure_ascii=False)}],
+            }})
         if tool_name == "gate_status":
             st = s.status()
             if not ident.is_owner:
@@ -660,47 +653,21 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
                         "content": [{"type": "text", "text": f"Cannot generate: GPU is not ready (state: '{s.machine.state.value}'). Call gate_wake first."}],
                     },
                 })
+            from .generation import GenerationError
             args = params.get("arguments", {})
-            title = "MCP Workflow"
-            preset = ""
-            if tool_name == "gate_txt2img":
-                prompt_text = (args.get("prompt") or "").strip()
-                if not prompt_text:
-                    return web.json_response({
-                        "jsonrpc": "2.0",
-                        "id": req_id,
-                        "result": {"isError": True, "content": [{"type": "text", "text": "Missing required argument 'prompt'"}]},
-                    })
-                make_graph, _ = _load_moss_builder()
-                preset = args.get("preset", "Fast alt · fix + darask0 0.35 · 10 steps")
-                prompt_graph = make_graph(
-                    prompt=prompt_text,
-                    negative_prompt=args.get("negative_prompt", "worst quality, bad anatomy, watermark, jpeg artifact"),
-                    preset=preset,
-                    seed=args.get("seed", -1),
-                    width=args.get("width", 1024),
-                    height=args.get("height", 1024),
-                )
-                title = prompt_text[:80]
-            else:
-                prompt_graph = args.get("prompt")
-                if not isinstance(prompt_graph, dict):
-                    return web.json_response({
-                        "jsonrpc": "2.0",
-                        "id": req_id,
-                        "result": {"isError": True, "content": [{"type": "text", "text": "Argument 'prompt' must be a ComfyUI graph dictionary"}]},
-                    })
-
-            timeout_s = int(args.get("timeout_seconds") or 180)
             try:
-                job = request.app[BATCH].enqueue(
-                    prompt=prompt_graph,
-                    submitted_by=ident.email,
-                    title=title,
-                    preset=preset,
-                    timeout_s=timeout_s,
-                )
-            except BatchError as be:
+                if not isinstance(args, dict):
+                    raise GenerationError(400, "invalid_parameter", "arguments must be an object")
+                if tool_name == "gate_txt2img":
+                    job = await _enqueue_generation(request, args)
+                else:
+                    job = request.app[BATCH].enqueue(
+                        prompt=args.get("prompt"), submitted_by=ident.email, title="MCP Workflow",
+                        profile_id=args.get("profile") or s.machine.profile or "",
+                        timeout_s=int(args.get("timeout_seconds") or 180),
+                    )
+                timeout_s = job.timeout_s
+            except (BatchError, GenerationError, AuthError) as be:
                 return web.json_response({
                     "jsonrpc": "2.0",
                     "id": req_id,
@@ -857,12 +824,7 @@ async def studio_page(request: web.Request) -> web.Response:
         },
         "owner_only": list(settings.owner_only_actions),
     }
-    _, presets = _load_moss_builder()
-    profiles_data = {
-        "profiles": [p.summary() for p in request.app[PROFILES].values()],
-        "default": settings.default_profile,
-        "presets": list(presets),
-    }
+    profiles_data = _profile_catalog(request)
     init_json = json.dumps({
         "status": status_data,
         "profiles": profiles_data,

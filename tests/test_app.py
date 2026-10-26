@@ -45,7 +45,7 @@ async def test_wake_page_and_api(tmp_path):
         r2 = await c.post("/_gate/wake", json={})
         assert r2.status == 200 and (await r2.json())["joined"] is True
         r = await c.post("/_gate/wake", json={"profile": "nope"})
-        assert r.status in (200, 404)
+        assert r.status == 404
         r = await c.get("/queue")
         assert r.status == 200
         r = await c.get("/_gate/healthz")

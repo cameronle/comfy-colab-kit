@@ -86,7 +86,7 @@ codex mcp add comfy -- ckit mcp
 
 Open the displayed pairing link, sign in using the allowed email and approve the device yourself. `ckit` saves the endpoint-specific token to `~/.config/ckit/config.json`; never send this file or its token through chat. On Windows, use the same ckit/Codex commands from the local terminal and protect the saved file with the account's private filesystem permissions. The POSIX `umask` command is not a PowerShell command.
 
-The stdio MCP bridge reads the ckit config and calls the real HTTPS gateway; no token needs to be put in the Codex command or config. `codex mcp list` should show the entry. Tools are `gate_status`, `gate_wake`, `gate_txt2img`, `gate_generate`, and `gate_stop`.
+The stdio MCP bridge reads the ckit config and calls the real HTTPS gateway; no token needs to be put in the Codex command or config. `codex mcp list` should show the entry. Tools are `gate_profiles`, `gate_status`, `gate_wake`, `gate_txt2img`, `gate_generate`, and `gate_stop`.
 
 Alternatively, use native Streamable HTTP in `~/.codex/config.toml`:
 
@@ -99,6 +99,51 @@ tool_timeout_sec = 3600
 ```
 
 Load `CKIT_TOKEN` from your private ckit endpoint configuration into the environment of the Codex process. Do not inline it into TOML, process arguments, repository files or messages. Configure only one entry named `comfy`—choose stdio or HTTP, not both. Long tool timeouts accommodate cold starts but do not authorize spending.
+
+## Profile-aware quick generation
+
+Web, `ckit generate` and both MCP transports submit high-level parameters to the
+same server-side adapter. `GET /_gate/profiles`, `ckit profiles --json` and MCP
+`gate_profiles` expose capabilities without allocating compute. Look at each
+profile's **generation** object, not the global legacy MOSS preset list.
+
+- `moss-image` → `matlowai-presets`: six DeBand presets; negative prompts and
+  uploaded reference-image editing are supported.
+- `qwen-image` → `qwen21-turbo-t2i`: official 8-step Turbo conditioning/cache and
+  sigma schedule. Automatic prompt rewriting is disabled to preserve input text.
+  CFG=1 means no nonempty negative prompt; reference editing is not connected.
+  The weights use the Qwen Research License (non-commercial research/evaluation;
+  commercial use requires separate permission).
+- `sd-latest` → `sd35-large`: SD 3.5 Large FP8 checkpoint, official 20-step
+  sampler/conditioning; supports negative prompts, not quick reference editing.
+  Stability AI Community License conditions apply, including commercial-revenue limits.
+
+Other profile workflows remain raw-graph/optional-fetch capabilities, not promises
+that `gate_txt2img` can run every listed workflow. Unsupported presets, workflows
+and parameters return explicit validation errors. Width/height must be 256–2048
+and multiples of the advertised `dimension_multiple` (Qwen 32, MOSS/SD 16).
+Prompts are never trimmed, shortened or rewritten by the quick adapter.
+
+The following commands may allocate/use compute; run them **only for an approved
+GPU task**, not as installation probes:
+
+```bash
+ckit wake --profile qwen-image --wait
+ckit generate --profile qwen-image --prompt 'The complete original prompt' --seed 42
+```
+
+`ckit generate` and MCP generation require an already-ready matching runtime.
+Web quick generation may explicitly auto-wake the selected model. A request for
+another profile while a runtime is active returns `409 profile_mismatch`; it does
+not stop the VM, download another model set or rebuild the in-kernel engine.
+Explicit switching is refused with `queue_busy` while work is queued/running.
+Jobs record their profile, workflow and resolved parameters; dispatch and the
+headless runner recheck profile identity before remote execution/engine creation.
+
+Local unit/fake-runtime and Chromium tests validate routing, graph construction,
+parameter fidelity and UI behavior. They do **not** establish Qwen/SD GPU model
+compatibility, VRAM fit, image quality or throughput; those need separately
+approved real model runs with time/CU budgets.
 
 ## Batch cold-start and failure handling
 
@@ -122,7 +167,7 @@ Verify separately:
 2. local and public liveness return JSON, unauthorized machine calls return JSON `401`.
 3. browser pages redirect to the correct Access login; device approval does not accept agent tokens.
 4. authenticated status/profile/queue calls work; traversal and cross-origin requests fail.
-5. an official MCP SDK can initialize, list all five tools and call `gate_status` through real HTTPS; stdio notifications must not produce responses.
+5. an official MCP SDK can initialize, list all six tools and call `gate_status`/`gate_profiles` through real HTTPS; stdio notifications must not produce responses.
 6. device-code creation and polling work without returning Access HTML; before human approval, polling must stay `authorization_pending`.
 7. Colab usage/sessions still show no allocation after installation checks.
 8. the first human OTP login and real GPU-generated output are separate acceptance steps, not established by the checks above.

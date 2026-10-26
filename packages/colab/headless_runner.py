@@ -272,6 +272,8 @@ def _get_or_create_engine(
     store = main_mod.__dict__ if main_mod is not None else globals()
     profile_id = cfg.get("profile") or "default"
     cached = store.get(KERNEL_CACHE_KEY)
+    if cached is not None and cached.get("profile") != profile_id and engine_factory is None:
+        raise ValueError("profile_mismatch: a different profile is already loaded in this kernel; stop and switch explicitly")
     if cached is not None and cached.get("profile") == profile_id and engine_factory is None:
         return cached["engine"]
     factory = engine_factory or _RealComfyEngine
@@ -286,6 +288,7 @@ def execute_prompt(
     prompt_id: str,
     runtime_cfg_path: str = DEFAULT_RUNTIME_CFG,
     engine_factory: Callable[[dict[str, Any]], Any] | None = None,
+    expected_profile: str | None = None,
 ) -> dict[str, Any]:
     """Execute one ComfyUI API prompt graph headlessly and return structured output info."""
     try:
@@ -298,13 +301,15 @@ def execute_prompt(
         # The kernel-global engine cache still persists between consecutive jobs.
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="kit-batch") as pool:
-            return pool.submit(execute_prompt, prompt, prompt_id, runtime_cfg_path, engine_factory).result()
+            return pool.submit(execute_prompt, prompt, prompt_id, runtime_cfg_path, engine_factory, expected_profile).result()
     if not isinstance(prompt, dict) or not prompt:
         raise ValueError("prompt must be a non-empty ComfyUI API graph dictionary")
     cfg: dict[str, Any] = {}
     if runtime_cfg_path and os.path.isfile(runtime_cfg_path):
         with open(runtime_cfg_path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
+    if expected_profile and expected_profile != cfg.get("profile"):
+        raise ValueError("profile_mismatch: task profile does not match this runtime; refusing engine initialization")
     graph = copy.deepcopy(prompt)
     remap_models(graph, cfg.get("model_aliases") or {})
 
@@ -335,7 +340,8 @@ def run_task_file(
     if isinstance(prompt, dict) and isinstance(prompt.get("prompt"), dict):
         prompt = prompt["prompt"]
     try:
-        return execute_prompt(prompt, prompt_id=prompt_id, runtime_cfg_path=runtime_cfg_path, engine_factory=engine_factory)
+        return execute_prompt(prompt, prompt_id=prompt_id, runtime_cfg_path=runtime_cfg_path,
+                              engine_factory=engine_factory, expected_profile=task.get("profile_id"))
     except Exception as e:
         err_payload = {
             "prompt_id": prompt_id,

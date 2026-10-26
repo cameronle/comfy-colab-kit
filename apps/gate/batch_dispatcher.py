@@ -88,6 +88,9 @@ class BatchJob:
     created_at: float
     title: str = ""
     preset: str = ""
+    profile_id: str = ""
+    workflow_id: str = ""
+    parameters: dict[str, Any] = field(default_factory=dict)
     timeout_s: int = 300
     status: str = "queued"  # queued | waiting_gpu | running | success | error | cancelled
     started_at: float | None = None
@@ -117,6 +120,9 @@ class BatchJob:
             "number": self.number,
             "title": self.title,
             "preset": self.preset,
+            "profile_id": self.profile_id,
+            "workflow_id": self.workflow_id,
+            "parameters": self.parameters,
             "submitted_by": self.submitted_by,
             "status": self.status,
             "created_at": self.created_at,
@@ -212,6 +218,9 @@ class BatchDispatcher:
                     created_at=float(raw.get("created_at") or time.time()),
                     title=str(raw.get("title") or ""),
                     preset=str(raw.get("preset") or ""),
+                    profile_id=str(raw.get("profile_id") or ""),
+                    workflow_id=str(raw.get("workflow_id") or ""),
+                    parameters=raw.get("parameters") if isinstance(raw.get("parameters"), dict) else {},
                     status=st,
                     started_at=raw.get("started_at"),
                     finished_at=raw.get("finished_at"),
@@ -237,6 +246,9 @@ class BatchDispatcher:
                     "created_at": j.created_at,
                     "title": j.title,
                     "preset": j.preset,
+                    "profile_id": j.profile_id,
+                    "workflow_id": j.workflow_id,
+                    "parameters": j.parameters,
                     "status": j.status,
                     "started_at": j.started_at,
                     "finished_at": j.finished_at,
@@ -281,6 +293,9 @@ class BatchDispatcher:
         preset: str = "",
         timeout_s: int = 300,
         allow_booting: bool = False,
+        profile_id: str = "",
+        workflow_id: str = "",
+        parameters: dict[str, Any] | None = None,
     ) -> BatchJob:
         if not isinstance(prompt, dict) or not prompt:
             raise BatchError(400, "invalid_prompt", "prompt must be a non-empty ComfyUI API graph dictionary")
@@ -291,6 +306,9 @@ class BatchDispatcher:
         st = self.session.machine.state
         if st != State.READY and not (allow_booting and self.session.machine.is_booting):
             raise BatchError(503, "asleep", f"ComfyUI batch runtime is {st.value}; POST /_gate/wake first")
+        bound_profile = profile_id or self.session.machine.profile or ""
+        if bound_profile != self.session.machine.profile:
+            raise BatchError(409, "profile_mismatch", "Job profile differs from the active GPU profile; switch explicitly when idle")
 
         self.start()
         self._seq += 1
@@ -303,6 +321,9 @@ class BatchDispatcher:
             created_at=time.time(),
             title=(title or "")[:120],
             preset=(preset or "")[:80],
+            profile_id=bound_profile,
+            workflow_id=workflow_id or "api",
+            parameters=dict(parameters or {}),
             timeout_s=max(15, min(1800, int(timeout_s or 300))),
             status="waiting_gpu" if st != State.READY else "queued",
         )
@@ -467,6 +488,12 @@ class BatchDispatcher:
                 job.finished_at = time.time()
                 return
 
+        if job.profile_id != self.session.machine.profile:
+            job.status = "error"
+            job.error = "profile_mismatch: queued job profile differs from the active GPU profile"
+            job.finished_at = time.time()
+            return
+
         job.status = "running"
         job.started_at = time.time()
         self.session.touch()
@@ -480,7 +507,8 @@ class BatchDispatcher:
         fd = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
         try:
             os.chmod(fd.name, 0o600)
-            json.dump({"prompt_id": job.prompt_id, "prompt": job.prompt}, fd, ensure_ascii=False)
+            json.dump({"prompt_id": job.prompt_id, "prompt": job.prompt,
+                       "profile_id": job.profile_id, "workflow_id": job.workflow_id}, fd, ensure_ascii=False)
             fd.close()
             await self.session.colab.upload(session_name, fd.name, remote_task)
         finally:

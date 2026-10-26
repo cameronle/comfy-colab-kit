@@ -41,7 +41,9 @@ async def test_concurrent_wake_launches_exactly_one_colab():
         await wait_for(lambda: s.machine.state == State.READY)
         assert [c for c in colab.calls if c.startswith("new:")] == ["new:comfy:L4"]
         r = await s.wake("moss-image", by="late@x.com")
-        assert r.joined and r.profile == "tiny"
+        assert r.refused == "profile_mismatch" and r.profile == "tiny"
+        joined = await s.wake("tiny", by="same@x.com")
+        assert joined.joined and joined.profile == "tiny"
         assert len([c for c in colab.calls if c.startswith("new:")]) == 1
 
 

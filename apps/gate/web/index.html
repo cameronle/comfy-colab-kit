@@ -310,7 +310,7 @@ details.console pre {
             <label class="label" for="seed-input">随机种子 (-1 为随机)</label>
             <input type="number" class="input" id="seed-input" value="-1">
           </div>
-          <div>
+          <div id="reference-options">
             <label class="label" for="ref-file">参考底图 (可选 · 图生图)</label>
             <input type="file" class="input" id="ref-file" accept=".png,.jpg,.jpeg,.webp" style="padding:7px 9px">
           </div>
@@ -319,7 +319,8 @@ details.console pre {
           <label class="label" for="denoise-input">重绘幅度 (Denoise: <span id="denoise-val">0.65</span>)</label>
           <input type="range" id="denoise-input" min="0.1" max="1.0" step="0.05" value="0.65" style="width:100%">
         </div>
-        <details style="margin-bottom:12px">
+        <p id="generation-hint" style="color:var(--muted);font-size:12px"></p>
+        <details id="negative-options" style="margin-bottom:12px">
           <summary style="cursor:pointer;font-size:12px;color:var(--muted)">高级选项（负面提示词）</summary>
           <div class="field" style="margin-top:8px">
             <input type="text" class="input" id="neg-input" value="worst quality, bad anatomy, watermark, jpeg artifact">
@@ -464,12 +465,7 @@ async function api(path, opts = {}) {
 const init = window.__INIT__ || {};
 let S = init.status || null;
 let profiles = (init.profiles && init.profiles.profiles) || [];
-let presets = (init.profiles && init.profiles.presets) || [
-  'Fast alt · fix + darask0 0.35 · 10 steps',
-  'Fast · fix + lodestones DMD 0.35 · 10 steps',
-  'Balanced · fix + lodestones DMD 0.28 · 14 steps',
-  'Quality · banding fix · 25 steps'
-];
+let generationProfile = '';
 let jobsMap = new Map();
 ((init.jobs) || []).forEach(j => jobsMap.set(j.prompt_id, j));
 let logLines = 0;
@@ -487,11 +483,34 @@ function renderSelectors() {
     `<option value="${esc(p.id)}" ${p.id === currentProf ? 'selected' : ''}>${esc(p.title)} (~${p.size_gb_default} GB)</option>`
   ).join('');
 
-  const prSel = $('preset-select');
-  prSel.innerHTML = presets.map((pr, idx) =>
-    `<option value="${esc(pr)}" ${idx === 0 ? 'selected' : ''}>${esc(pr)}</option>`
-  ).join('');
+  renderGenerationOptions();
 }
+
+function selectedCapabilities() {
+  const profile = profiles.find(p => p.id === $('profile-select').value);
+  return (profile && profile.generation) || {available: false};
+}
+
+function renderGenerationOptions() {
+  const cap = selectedCapabilities();
+  generationProfile = $('profile-select').value;
+  $('preset-select').innerHTML = (cap.presets || []).map(pr =>
+    `<option value="${esc(pr)}" ${pr === cap.default_preset ? 'selected' : ''}>${esc(pr)}</option>`
+  ).join('');
+  $('size-select').innerHTML = (cap.sizes || []).map(([w, h]) =>
+    `<option value="${w}x${h}">${w} × ${h}</option>`).join('');
+  $('reference-options').hidden = !cap.reference_image;
+  $('ref-file').disabled = !cap.reference_image;
+  if (!cap.reference_image) $('ref-file').value = '';
+  $('denoise-wrap').hidden = !cap.reference_image || !$('ref-file').files.length;
+  $('negative-options').hidden = !cap.negative_prompt;
+  $('neg-input').disabled = !cap.negative_prompt;
+  $('neg-input').value = cap.default_negative || '';
+  $('generation-hint').textContent = cap.available
+    ? `${cap.workflow_id} · ${cap.license}` : '此模型未接入简易生图，请使用 API 工作流。';
+}
+
+$('profile-select').onchange = () => { renderGenerationOptions(); renderStatus(); };
 
 const STATE_LABELS = {
   sleeping: '休眠中', allocating: '分配算力中', installing: '安装依赖中',
@@ -547,6 +566,8 @@ function renderStatus() {
   $('stop-btn').disabled = !canStop;
   $('extend-btn').hidden = st !== 'ready' || !S.can_extend || !canWake;
   $('profile-select').disabled = !(st === 'sleeping' || st === 'failed');
+  if (st !== 'sleeping' && st !== 'failed' && S.profile) $('profile-select').value = S.profile;
+  if (generationProfile !== $('profile-select').value) renderGenerationOptions();
 
   const isOwner = !!(S.you && S.you.owner);
   $('cu-metrics').hidden = !(isOwner && S.cu);
@@ -575,6 +596,7 @@ function renderStatus() {
   if (S.you) {
     $('modal-user-info').textContent = `${S.you.email} · ${S.you.owner ? '管理员 (Owner)' : '协作者'}`;
   }
+  if (!selectedCapabilities().available || st === 'stopping' || st === 'switching') submitQuick.disabled = true;
 }
 
 function renderJobs() {
@@ -605,6 +627,7 @@ function renderJobs() {
       <div class="job-thumb">${thumbHtml}</div>
       <div class="job-meta">
         <div class="job-title" title="${esc(j.title)}">${esc(j.title || j.prompt_id)}</div>
+        <div class="job-sub">${esc(j.profile_id || '旧任务')} · ${esc(j.workflow_id || '未记录模型')}</div>
         <div class="job-sub"><span>#${j.number || '-'}</span><span>${esc(statusTxt)}</span></div>
       </div>
     </article>`;
@@ -659,13 +682,15 @@ $('denoise-input').oninput = () => {
 $('quick-form').onsubmit = async (ev) => {
   ev.preventDefault();
   $('job-err').hidden = true;
-  const prompt = $('prompt-input').value.trim();
-  if (!prompt) return;
+  const prompt = $('prompt-input').value;
+  if (!prompt.trim()) return;
+  const cap = selectedCapabilities();
+  if (!cap.available) return;
   const btn = $('submit-quick-btn');
   btn.disabled = true;
   try {
     let refName = '';
-    const f = $('ref-file').files[0];
+    const f = cap.reference_image && $('ref-file').files[0];
     if (f) {
       const fd = new FormData();
       fd.append('image', f);
@@ -675,20 +700,20 @@ $('quick-form').onsubmit = async (ev) => {
     }
     const [w, h] = $('size-select').value.split('x').map(Number);
     const needWake = !S || (S.state !== 'ready');
+    const payload = {
+      prompt, preset: $('preset-select').value,
+      width: w || 1024, height: h || 1024,
+      seed: Number($('seed-input').value || -1),
+      profile: $('profile-select').value, auto_wake: needWake,
+    };
+    if (cap.negative_prompt) payload.negative_prompt = $('neg-input').value;
+    if (refName) {
+      payload.reference_image = refName;
+      payload.denoise = Number($('denoise-input').value || 0.65);
+    }
     const res = await api('/_gate/txt2img', {
       method: 'POST',
-      body: JSON.stringify({
-        prompt,
-        negative_prompt: $('neg-input').value.trim(),
-        preset: $('preset-select').value,
-        width: w || 1024,
-        height: h || 1024,
-        seed: Number($('seed-input').value || -1),
-        reference_image: refName,
-        denoise: Number($('denoise-input').value || 0.65),
-        profile: $('profile-select').value,
-        auto_wake: needWake
-      })
+      body: JSON.stringify(payload)
     });
     if (res.job) {
       jobsMap.set(res.job.prompt_id, res.job);

@@ -3,10 +3,11 @@ info:
   title: comfy-gate
   version: 0.1.0
   description: |
-    Wake-on-demand gateway for ComfyUI on Google Colab. One global shared session per gate:
-    `POST /_gate/wake` is idempotent — callers join an in-flight or running session.
-    Every path that is not `/_gate/*` is reverse-proxied to ComfyUI (including `/ws`) once the state is `ready`;
-    before that `/` serves the wake page and API paths return 503 `asleep`.
+    Headless batch gateway for ComfyUI on Google Colab; no Colab web listener or tunnel.
+    One shared GPU profile per gate. Wake joins only a matching in-flight/running profile;
+    a different profile returns 409 profile_mismatch. Explicit switching is refused while
+    jobs are queued/running. Query /_gate/profiles without allocating compute, then use
+    /_gate/txt2img for validated profile-aware quick generation or /prompt for API graphs.
 servers:
   - url: https://comfy.example.com
 security:
@@ -22,7 +23,7 @@ components:
     agentBearer:
       type: http
       scheme: bearer
-      description: Contents of AGENT_TOKEN_FILE. Agents are treated as owners.
+      description: Device-paired application token (or legacy AGENT_TOKEN_FILE); owner privileges follow the verified token identity.
   schemas:
     State:
       type: string
@@ -62,7 +63,9 @@ components:
           description: |
             no_access_token | invalid_token | bad_alg | unknown_kid | no_email | not_allowed | bad_agent_token |
             owner_only | unknown_profile | quiet_hours | daily_budget | monthly_budget | low_balance |
-            extend_limit | asleep | backend_unreachable
+            extend_limit | asleep | backend_unreachable | profile_mismatch | queue_busy |
+            unsupported_profile | unsupported_workflow | unsupported_parameter | unsupported_preset |
+            invalid_parameter | invalid_dimensions | invalid_reference | template_mismatch
         message: {type: string}
   responses:
     Unauthorized: {description: Missing/invalid Access JWT or bearer, content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
@@ -88,8 +91,54 @@ paths:
       responses: {"200": {description: text/event-stream}}
   /_gate/profiles:
     get:
-      summary: Available profiles and validation errors
+      summary: Available profiles, per-model quick-generation capabilities and validation errors
+      description: |
+        Does not wake or allocate compute. Each profile's generation object describes
+        available, workflow_id, presets, default_preset, negative_prompt, reference_image,
+        default_negative, dimension_multiple, default_width/default_height, sizes and license.
+        Unsupported adapters have available=false and a reason. Other workflows listed
+        in a profile are not automatically supported by the quick-generation endpoint.
       responses: {"200": {description: ok}}
+  /_gate/txt2img:
+    post:
+      summary: Queue a profile-aware image job
+      description: |
+        Preserves the complete prompt string. The selected profile chooses the graph;
+        omitted parameters use profile-specific defaults. Currently connects MOSS
+        matlowai-presets, Qwen qwen21-turbo-t2i (8 steps), and SD sd35-large (20 steps).
+        Unsupported parameters are rejected, not silently ignored. Qwen Turbo uses
+        CFG=1 and rejects nonempty negative prompts. Reference editing is MOSS-only.
+        auto_wake=true requires wake permission and may allocate paid Colab compute;
+        it never switches an active GPU to another profile. A timeout never replays a job.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [prompt]
+              properties:
+                prompt: {type: string, minLength: 1, description: Full original positive prompt; whitespace is preserved}
+                profile: {type: string, description: Defaults to the current profile or configured default}
+                workflow: {type: string, description: Must match the generation.workflow_id advertised for this profile}
+                preset: {type: string, description: Select from generation.presets; omit for the model default}
+                negative_prompt: {type: string, description: Model-specific; Qwen Turbo only accepts an empty string}
+                seed: {type: integer, minimum: -1, maximum: 18446744073709551615, default: -1}
+                width: {type: integer, minimum: 256, maximum: 2048, default: 1024, description: Must satisfy generation.dimension_multiple}
+                height: {type: integer, minimum: 256, maximum: 2048, default: 1024, description: Must satisfy generation.dimension_multiple}
+                reference_image: {type: string, description: MOSS-only uploaded image filename, not a path}
+                denoise: {type: number, minimum: 0.05, maximum: 1, description: MOSS reference-image denoising strength}
+                auto_wake: {type: boolean, default: false}
+                timeout_seconds: {type: integer, minimum: 15, maximum: 1800, default: 300}
+      responses:
+        "202": {description: Queued; returns prompt_id, number and job with profile_id/workflow_id/parameters}
+        "400": {description: Invalid or unsupported model parameter/workflow/template}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {description: Unknown profile or missing uploaded reference}
+        "409": {description: profile_mismatch or wake refused by budget/balance policy}
+        "503": {description: asleep; wake the matching profile first or explicitly request auto_wake}
   /_gate/wake:
     post:
       summary: Wake (idempotent; joins an existing session)
@@ -99,7 +148,7 @@ paths:
             schema:
               type: object
               properties:
-                profile: {type: string, description: ignored when joining a running session}
+                profile: {type: string, description: Must match an existing active profile; otherwise returns profile_mismatch}
                 workflows: {type: array, items: {type: string}, description: workflow ids to install (default = non-optional ones)}
       responses:
         "202": {description: this call started a new session}
@@ -107,7 +156,7 @@ paths:
         "401": {$ref: "#/components/responses/Unauthorized"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {description: unknown profile}
-        "409": {description: refused by quiet hours / budget / balance}
+        "409": {description: profile_mismatch or refused by quiet hours / budget / balance}
   /_gate/fetch:
     post:
       summary: Download extra workflows' models onto the running VM (on demand)
@@ -129,7 +178,7 @@ paths:
     post:
       summary: Switch profile (owner-only by default; v1 = cold switch)
       requestBody: {content: {application/json: {schema: {type: object, required: [profile], properties: {profile: {type: string}}}}}}
-      responses: {"202": {description: switching}, "403": {$ref: "#/components/responses/Forbidden"}, "404": {description: unknown profile}}
+      responses: {"202": {description: switching}, "403": {$ref: "#/components/responses/Forbidden"}, "404": {description: unknown profile}, "409": {description: queue_busy or profile_mismatch}}
   /_gate/stop:
     post:
       summary: Stop now and release the Colab VM (owner-only by default)

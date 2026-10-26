@@ -7,7 +7,7 @@ Exposes comfy-gate lifecycle and ComfyUI generation tools to AI agents
 Tools:
   - gate_status: Query session state, profile, remaining seconds, CU ledger.
   - gate_wake: Wake or join the shared Colab GPU instance and wait until ready.
-  - gate_txt2img: High-level text-to-image with MOSS-Image DeBand pipeline and presets.
+  - gate_txt2img: Profile-aware text-to-image (MOSS, Qwen 2.1 Turbo, SD 3.5 Large).
   - gate_generate: Submit a raw ComfyUI prompt graph, poll for completion, and return image URLs.
   - gate_stop: Release the Colab GPU immediately to prevent Compute Unit waste.
 
@@ -115,6 +115,11 @@ def call_gate(method: str, path: str, body: dict | None = None) -> tuple[int, di
 
 TOOLS = [
     {
+        "name": "gate_profiles",
+        "description": "Read available profiles and per-model quick-generation presets, supported parameters and license notices. Does not allocate compute.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "gate_status",
         "description": "Inspect the Comfy Colab session state, active profile, progress, remaining time, and Compute Unit balance.",
         "inputSchema": {
@@ -141,7 +146,7 @@ TOOLS = [
     },
     {
         "name": "gate_txt2img",
-        "description": "Generate an image using the pre-configured MOSS-Image DeBand pipeline with high quality and anti-banding LoRAs. Returns full image URLs.",
+        "description": "Generate through the selected model profile: MOSS-Image, Qwen 2.1 Turbo or SD 3.5 Large. Query gate_profiles for supported presets, parameters and licenses. Requires an already-awake matching GPU; returns full image URLs.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -149,13 +154,15 @@ TOOLS = [
                     "type": "string",
                     "description": "Text description of the image to generate (positive prompt)."
                 },
+                "profile": {"type": "string", "description": "Profile ID; defaults to the active GPU profile."},
+                "workflow": {"type": "string", "description": "Quick workflow ID advertised by gate_profiles."},
                 "negative_prompt": {
                     "type": "string",
-                    "description": "Optional negative prompt elements to avoid (default: 'worst quality, bad anatomy, watermark, jpeg artifact')."
+                    "description": "Optional negative prompt. Qwen Turbo CFG=1 rejects nonempty negatives; defaults are profile-specific."
                 },
                 "preset": {
                     "type": "string",
-                    "description": "Speed/quality preset: 'Fast alt' (default, 10 steps, recommended), 'Fast' (10 steps), 'Balanced' (14 steps), 'Quality' (25 steps)."
+                    "description": "Profile-specific preset from gate_profiles. Omit to use that profile's default."
                 },
                 "seed": {
                     "type": "integer",
@@ -211,12 +218,15 @@ TOOLS = [
 ]
 
 
-def _execute_prompt(prompt: dict, timeout_s: int = 180) -> dict:
+def _execute_prompt(prompt: dict, timeout_s: int = 180, *, submission_path: str = "/prompt") -> dict:
     code, status = call_gate("GET", "/_gate/status")
     if status.get("state") != "ready":
         return {"isError": True, "content": [{"type": "text", "text": f"Cannot generate: ComfyUI is not ready (current state: '{status.get('state')}'). Call gate_wake first."}]}
 
-    p_code, p_out = call_gate("POST", "/prompt", {"prompt": prompt})
+    body = {"prompt": prompt} if submission_path == "/prompt" else prompt
+    if submission_path == "/_gate/txt2img" and "profile" not in body:
+        body["profile"] = status.get("profile")
+    p_code, p_out = call_gate("POST", submission_path, body)
     if p_code >= 400 or "prompt_id" not in p_out:
         return {"isError": True, "content": [{"type": "text", "text": f"Failed to submit prompt ({p_code}): {json.dumps(p_out, ensure_ascii=False)}"}]}
 
@@ -259,6 +269,9 @@ def _execute_prompt(prompt: dict, timeout_s: int = 180) -> dict:
 
 
 def handle_tool_call(name: str, args: dict) -> dict:
+    if name == "gate_profiles":
+        code, out = call_gate("GET", "/_gate/profiles")
+        return {"isError": code >= 400, "content": [{"type": "text", "text": json.dumps(out, indent=2, ensure_ascii=False)}]}
     if name == "gate_status":
         code, out = call_gate("GET", "/_gate/status")
         return {"content": [{"type": "text", "text": json.dumps(out, indent=2, ensure_ascii=False)}]}
@@ -291,33 +304,10 @@ def handle_tool_call(name: str, args: dict) -> dict:
         return {"content": [{"type": "text", "text": json.dumps(out, indent=2, ensure_ascii=False)}]}
 
     if name == "gate_txt2img":
-        prompt_text = (args.get("prompt") or "").strip()
-        if not prompt_text:
+        prompt_text = args.get("prompt")
+        if not isinstance(prompt_text, str) or not prompt_text.strip():
             return {"isError": True, "content": [{"type": "text", "text": "Missing required argument 'prompt'"}]}
-        negative_prompt = args.get("negative_prompt", "worst quality, bad anatomy, watermark, jpeg artifact")
-        preset = args.get("preset", "Fast alt · fix + darask0 0.35 · 10 steps")
-        seed = args.get("seed", -1)
-        width = args.get("width", 1024)
-        height = args.get("height", 1024)
-        timeout_s = args.get("timeout_seconds", 180)
-
-        try:
-            from .moss_template import make_moss_txt2img_graph
-        except ImportError:
-            try:
-                from cli.moss_template import make_moss_txt2img_graph
-            except ImportError:
-                from moss_template import make_moss_txt2img_graph
-
-        graph = make_moss_txt2img_graph(
-            prompt=prompt_text,
-            negative_prompt=negative_prompt,
-            preset=preset,
-            seed=seed,
-            width=width,
-            height=height,
-        )
-        return _execute_prompt(graph, timeout_s)
+        return _execute_prompt(dict(args), args.get("timeout_seconds", 300), submission_path="/_gate/txt2img")
 
     if name == "gate_generate":
         prompt = args.get("prompt")

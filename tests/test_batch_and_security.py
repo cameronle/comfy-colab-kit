@@ -90,11 +90,11 @@ async def test_batch_pipeline_upload_txt2img_mcp_and_rolling_cleanup(tmp_path):
     settings = Settings.from_env({
         "AUTH_DISABLED": "true",
         "STATE_DIR": str(tmp_path),
-        "DEFAULT_PROFILE": "tiny",
+        "DEFAULT_PROFILE": "moss-image",
         "MAX_OUTPUT_FILES": "2",
     })
     colab = FakeColab()
-    prof = {"tiny": load_profile(ROOT / "tests/fixtures/profiles/tiny")}
+    prof = {"moss-image": load_profile(ROOT / "profiles/examples/moss-image")}
     app = build_app(settings, colab=colab, profiles=prof, run_background=False)
     client = TestClient(TestServer(app))
     await client.start_server()
