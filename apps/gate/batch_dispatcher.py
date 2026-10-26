@@ -405,10 +405,16 @@ class BatchDispatcher:
 
         leaves: set[str] = set()
         _collect_string_leaves(prompt, leaves)
-        for val in sorted(leaves):
+        # Prompt text is not a filesystem path. Match against directory entries
+        # before probing a file: short Unicode strings can exceed NAME_MAX bytes.
+        available_inputs = {
+            path.name for path in self.inputs_dir.iterdir()
+            if path.suffix.lower() in ALLOWED_IMAGE_EXTS
+        }
+        for val in sorted(leaves & available_inputs):
             if "/" in val or "\\" in val or val.startswith("."):
                 continue
-            candidate = self.inputs_dir / val
+            candidate = safe_resolve_under(self.inputs_dir, val)
             if candidate.is_file():
                 mtime = candidate.stat().st_mtime_ns
                 if self._uploaded_inputs.get(val) == mtime:
