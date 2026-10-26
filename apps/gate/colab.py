@@ -99,8 +99,37 @@ class ColabCLI:
     async def ensure_dirs(self, name: str, paths: list[str]) -> None:
         # Contents API uploads do not create parent directories. Send paths on
         # stdin, safely quoted as Python literals, before uploading any task.
-        code = f"import os\nfor _kit_dir in {paths!r}:\n    os.makedirs(_kit_dir, exist_ok=True)\n"
-        await self._run("exec", "-s", name, "--timeout", "20", stdin=code, timeout=30)
+        code = (
+            f"import os\nfor _kit_dir in {paths!r}:\n    os.makedirs(_kit_dir, exist_ok=True)\n"
+            "print('KIT_DIRS_READY', flush=True)\n"
+        )
+        for attempt in range(2):
+            try:
+                # Stream even this small command: CLI connection tracebacks can
+                # leave its process alive, hiding the real cause in communicate().
+                confirmed, tail = False, ""
+                async for line in self.exec_stream(name, code, 20):
+                    if line == "KIT_DIRS_READY":
+                        confirmed = True
+                    else:
+                        tail = (tail + line + " ")[-400:]
+                # The official CLI can exit zero after a remote Python error.
+                # Wait for connection closure AND an explicit success marker.
+                if not confirmed:
+                    raise ColabError(
+                        "Colab directory preparation failed before task upload: "
+                        f"missing KIT_DIRS_READY confirmation; {tail.strip() or 'no CLI output'}"
+                    )
+                return
+            except ColabConnectionError as e:
+                if attempt:
+                    raise ColabConnectionError(
+                        "Colab directory preparation failed before task upload after 2 attempts: "
+                        f"{e}"
+                    ) from e
+                # Only mkdir is replayed. No graph has been uploaded or run.
+                log.warning("directory preparation connection failed; retrying idempotent mkdir once: %s", e)
+                await asyncio.sleep(1)
 
     async def download(self, name: str, remote_path: str, local_path: str) -> None:
         await self._run("download", "-s", name, remote_path, local_path, timeout=600)
@@ -148,7 +177,9 @@ class ColabCLI:
             if rc:
                 raise ColabError(f"colab exec exited with {rc}")
         except asyncio.TimeoutError as e:
-            raise ColabError("colab exec timed out") from e
+            # A local deadline does not cancel remote notebook execution.
+            # The dispatcher must fail closed, never start a queued graph on it.
+            raise ColabConnectionError("colab exec timed out; execution completion unknown") from e
         finally:
             if proc.returncode is None:
                 try:

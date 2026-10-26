@@ -44,13 +44,17 @@ async def test_directory_preparation_executes_idempotent_safely_quoted_mkdir(tmp
     paths = [str(tmp_path / "nested/tasks"), str(tmp_path / "odd'directory")]
     cli = ColabCLI("unused-local-test")
 
-    async def run(*args, stdin=None, timeout=None):
-        assert args == ("exec", "-s", "owned-session", "--timeout", "20")
-        assert timeout == 30
-        subprocess.run([sys.executable, "-c", stdin], check=True, timeout=5)
-        return ""
+    async def stream(name, code, timeout_s):
+        assert name == "owned-session"
+        assert timeout_s == 20
+        result = subprocess.run(
+            [sys.executable, "-c", code], check=True, timeout=5,
+            capture_output=True, text=True,
+        )
+        for line in result.stdout.splitlines():
+            yield line
 
-    monkeypatch.setattr(cli, "_run", run)
+    monkeypatch.setattr(cli, "exec_stream", stream)
     await cli.ensure_dirs("owned-session", paths)
     await cli.ensure_dirs("owned-session", paths)
     assert all(Path(p).is_dir() for p in paths)

@@ -2,6 +2,8 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from aiohttp.test_utils import TestClient, TestServer
 
 from gate.app import BATCH, SESSION, build_app
@@ -113,7 +115,11 @@ async def test_stop_cancels_running_exec_and_pending_jobs_before_returning(tmp_p
         await client.close()
 
 
-async def test_transport_failure_releases_runtime_without_replaying_queued_job(tmp_path):
+@pytest.mark.parametrize("failure", [
+    "RuntimeError: Connection was lost.",
+    "colab exec timed out; execution completion unknown",
+])
+async def test_transport_failure_releases_runtime_without_replaying_queued_job(tmp_path, failure):
     from gate.colab import ColabConnectionError
 
     class LostConnection(FakeColab):
@@ -126,7 +132,7 @@ async def test_transport_failure_releases_runtime_without_replaying_queued_job(t
             if "run_task_file" in code:
                 self.started.set()
                 await self.fail.wait()
-                raise ColabConnectionError("RuntimeError: Connection was lost.")
+                raise ColabConnectionError(failure)
             async for line in super().exec_stream(name, code, timeout_s):
                 yield line
 
@@ -143,7 +149,7 @@ async def test_transport_failure_releases_runtime_without_replaying_queued_job(t
         second = app[BATCH].get_job((await response.json())["prompt_id"])
         remote.fail.set()
         await asyncio.wait_for(first.done_event.wait(), 2)
-        assert first.status == "error" and "Connection was lost" in first.error
+        assert first.status == "error" and failure in first.error
         assert not remote.live
         assert second.status == "cancelled"
         assert not app[SESSION].queue_busy

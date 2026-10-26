@@ -5,7 +5,7 @@ import sys
 import pytest
 import pytest_asyncio
 
-from gate.colab import ColabCLI, ColabError
+from gate.colab import ColabCLI, ColabConnectionError, ColabError
 
 
 @pytest_asyncio.fixture
@@ -61,7 +61,7 @@ async def test_stream_local_deadline_reaps_cli_child(local_cli, monkeypatch):
         return await original_wait(awaitable, min(timeout, 0.05))
 
     monkeypatch.setattr(asyncio, "wait_for", bounded_wait)
-    with pytest.raises(ColabError, match="timed out"):
+    with pytest.raises(ColabConnectionError, match="timed out; execution completion unknown"):
         async with asyncio.timeout(1):
             async for _ in cli.exec_stream("owned-session", "pass", 30):
                 pass
