@@ -497,6 +497,17 @@ def check(svg: Path, port: int) -> list[str] | None:
         return None
     try:
         cdp.call("Runtime.enable")
+        # CDP can attach while an SVG is still parsing. Measuring that partial
+        # DOM produces empty/zero boxes and falsely reports a broken SVG as OK.
+        cdp.evaluate("""(async () => {
+          if (document.readyState !== 'complete') {
+            await new Promise(resolve => window.addEventListener('load', resolve, {once: true}));
+          }
+          await document.fonts.ready;
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          if (!document.querySelector('svg')) throw new Error('SVG document did not load');
+          return true;
+        })()""")
         return defects(cdp.evaluate(MEASURE_JS))
     except Exception as exc:
         raise MeasurementError(f"{svg.name}: measurement failed: {exc}") from exc

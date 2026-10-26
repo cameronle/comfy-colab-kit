@@ -13,6 +13,7 @@ import os
 import shutil
 import socket
 import subprocess
+import tempfile
 import time
 import urllib.request
 from typing import Any
@@ -41,8 +42,10 @@ class CDP:
 
     def __init__(self, url: str, port: int = 9444, timeout: float = 20.0):
         self.port = port
+        # Never reuse a default Chrome profile or attach to a stale SVG tab.
+        self.profile = tempfile.TemporaryDirectory(prefix="ckit-svg-chrome-")
         args = [CHROME, "--headless=new", "--disable-gpu", f"--remote-debugging-port={port}",
-                "--window-size=1400,1300", "--hide-scrollbars"]
+                f"--user-data-dir={self.profile.name}", "--window-size=1400,1300", "--hide-scrollbars"]
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             # a container that runs as root cannot start Chrome without this
             args.append("--no-sandbox")
@@ -63,6 +66,7 @@ class CDP:
                     return
             except Exception:
                 time.sleep(0.4)
+        self.close()
         raise RuntimeError("could not attach to Chrome")
 
     # ── websocket ──────────────────────────────────────────────────────────
@@ -147,3 +151,14 @@ class CDP:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+                self.proc.wait(timeout=5)
+            # Chrome helpers may finish writing just after the main process
+            # exits. Retry removal briefly rather than hiding measurement output.
+            for attempt in range(5):
+                try:
+                    self.profile.cleanup()
+                    break
+                except OSError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * 2 ** attempt)
