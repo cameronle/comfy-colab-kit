@@ -29,9 +29,11 @@ async def local_commands(monkeypatch):
         elif action == "hang":
             script = "import time; time.sleep(60)"
         elif action == "unconfirmed":
-            script = "print('PermissionError: cannot create remote directory', flush=True)"
+            script = ("print('KIT_COLAB_EXEC_READY', flush=True); "
+                      "print('PermissionError: cannot create remote directory', flush=True)")
         else:
-            script = "import sys; exec(compile(sys.stdin.read(), '<local-mkdir>', 'exec'))"
+            script = ("import sys; print('KIT_COLAB_EXEC_READY', flush=True); "
+                      "exec(compile(sys.stdin.read(), '<local-mkdir>', 'exec'))")
         proc = await spawn_real(
             sys.executable, "-u", "-c", script,
             stdin=asyncio.subprocess.PIPE,

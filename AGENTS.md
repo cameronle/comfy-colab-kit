@@ -84,7 +84,7 @@ Billing states (CU accrues): every boot state, `ready`, `switching`, `failed`.
 ## 🧪 Tests & release
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,colab]"
 python -m pytest -q                 # state machine, auth, auto-stop config, profiles/schema, shared session, app
 python scripts/validate-profile.py  # all example profiles
 bash scripts/check-secrets.sh       # must print "secret scan: clean"

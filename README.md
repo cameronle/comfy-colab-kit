@@ -245,7 +245,7 @@ comfy-colab-kit/
 ## 🛠️ Development
 
 ```bash
-python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
+python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,colab]"
 npm install                 # Graphviz (WebAssembly) — lays out the architecture diagram
 python -m pytest -q
 node scripts/build-hero.mjs               # the dispatch bench, assets/architecture/hero.svg

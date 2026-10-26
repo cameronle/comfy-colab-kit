@@ -11,7 +11,7 @@ Cloudflare Access + existing VPS Tunnel
         |
 127.0.0.1:18088 — Python gateway managed by systemd
         |
-Google official Colab CLI, always --auth oauth2
+Google official Colab CLI/libraries, explicit OAuth2
         |
 Colab notebook kernel — offline PromptExecutor, upload inputs/download outputs
 ```
@@ -29,6 +29,14 @@ No cloudflared/ngrok tunnel, external web listener or keep-alive loop is install
 
 Set `HOME` to the existing Colab CLI account's home, explicitly set `COLAB_BIN`, and preserve its private `~/.config/colab-cli/` state. Protect the filesystem read-only except for the gateway state, runtime temporary directory and Colab state directory, because OAuth refresh must be able to update the local token. Do not load the full Hermes environment into the service.
 
+Execution runs `apps/gate/colab_exec.py` in a dedicated child using the official
+`google-colab-cli==0.7.5` and `jupyter-kernel-client==0.9.0` libraries. Install
+`.[colab]` in the gateway environment, or set `COLAB_EXEC_PYTHON` to the Python
+inside the existing CLI tool environment. A blank value uses the gateway's
+interpreter. `COLAB_BIN` still handles management, transfers and resource release;
+all paths use the existing OAuth2 identity. No vendor installation is patched.
+Unsupported library versions fail closed and need a reviewed adapter update.
+
 Important settings:
 
 ```dotenv
@@ -42,6 +50,7 @@ IDLE_TIMEOUT_MIN=10
 MIN_CU_BALANCE=10
 REQUIRE_CU_BALANCE=true
 ENABLE_SMOKE_TEST=false
+COLAB_CONNECT_TIMEOUT_S=45
 ```
 
 Configure the correct Access team, browser-application AUD, allowed email and owner email separately. Never commit real tokens, OAuth state or the production environment file.
@@ -147,6 +156,9 @@ approved real model runs with time/CU budgets.
 
 ## Batch cold-start and failure handling
 
+- REST kernel lookup/start and WebSocket handshake share a configurable monotonic connection budget (45 seconds by default). Never send the `/content` prelude or user code until the socket readiness event is set. A missing existing kernel is an error, not permission to replace it. Only a fresh session without a kernel ID creates its initial kernel, persisting that ID before the handshake.
+- An acknowledged prelude emits the private execution-ready marker; only then does the parent start the separate task execution deadline. The pinned client's interactive timeout loop can spin after timeout, so the adapter uses bounded channel-queue reads and requires both the matching execute reply and idle status. It sends the payload exactly once, keeps prompts unchanged and never retries a generation.
+- On success or failure, stop the owned transport, wake its blocked listener with socket shutdown, join the listener before closing its fd, and clear local running metadata before reporting a fatal error to the parent. Closing the fd from another thread first can strand an epoll wait. Parent cancellation and whole-phase deadlines still kill and reap the child if necessary; transport cleanup does not prove remote VM release.
 - Setup creates the task directory before both fresh setup and the reused-runtime shortcut. Dispatch also idempotently prepares task/input parents before upload; the official CLI Contents API cannot create missing parent directories.
 - Directory preparation uses the streamed CLI path and requires `KIT_DIRS_READY` plus a clean connection close. A transient connection failure or local execution deadline retries **only this idempotent mkdir**, at most once; a missing confirmation or Python error is not retried. Exhausted connection failures report the pre-upload stage and release the runtime/cancel pending work. Actual image graphs are never replayed automatically, including on execution timeouts whose remote completion is unknown.
 - Reference-input discovery intersects workflow strings with image names already present in local input storage before probing paths; prompt text is never passed blindly to filesystem stat calls. This avoids UTF-8 `NAME_MAX` failures without truncating prompts. Matched paths must remain inside input storage; existing mtime/session upload caching is preserved.

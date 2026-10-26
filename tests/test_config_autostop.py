@@ -19,6 +19,7 @@ def test_defaults():
     assert s.owner_only_control is True
     assert s.default_view == "app"
     assert (s.listen_host, s.listen_port) == ("127.0.0.1", 8080)
+    assert (s.colab_exec_python, s.colab_connect_timeout_s) == ("", 45)
 
     s_collab = Settings.from_env({**BASE, "OWNER_ONLY_CONTROL": "false"})
     assert s_collab.owner_only_control is False
@@ -36,12 +37,15 @@ def test_env_overrides_and_hosts():
         "PUBLIC_HOST": "comfy.example.com",
         "LISTEN_ADDR": "127.0.0.1:9000",
         "MAX_OUTPUT_FILES": "50",
+        "COLAB_EXEC_PYTHON": "/opt/colab/bin/python",
+        "COLAB_CONNECT_TIMEOUT_S": "60",
     })
     assert s.auto_stop.idle_timeout_min == 15 and s.auto_stop.max_session_hours == 2.5
     assert s.auto_stop.quiet_hours == (dtime(23, 30), dtime(7, 0))
     assert s.auto_stop.wake_on_visit and s.auto_stop.daily_cu_budget == 4
     assert (s.listen_host, s.listen_port) == ("127.0.0.1", 9000)
     assert s.max_output_files == 50
+    assert (s.colab_exec_python, s.colab_connect_timeout_s) == ("/opt/colab/bin/python", 60)
 
 
 @pytest.mark.parametrize(
@@ -55,6 +59,8 @@ def test_env_overrides_and_hosts():
         {"WAKE_ON_VISIT": "maybe"},
         {"LISTEN_ADDR": "8080"},
         {"CF_ACCESS_AUD": ""},
+        {"COLAB_CONNECT_TIMEOUT_S": "0"},
+        {"COLAB_CONNECT_TIMEOUT_S": "NaN"},
     ],
 )
 def test_invalid_env(env):

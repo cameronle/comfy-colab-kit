@@ -1,9 +1,9 @@
 """Thin async wrapper around the official `colab` CLI (google-colab-cli).
 
 The gate is the only component holding the Colab OAuth token (COLAB_TOKEN_DIR).
-Every CLI invocation explicitly passes `--auth oauth2` so ambient ADC or service
-accounts are never used accidentally. Secrets for the VM are sent on stdin of
-`colab exec` (never on argv) so they do not show up in process listings.
+Management CLI invocations explicitly pass `--auth oauth2`; the execution
+adapter fixes AuthProvider.OAUTH2 directly, never ambient ADC or service accounts.
+Secrets for the VM are sent on stdin (never on argv/process listings).
 """
 from __future__ import annotations
 
@@ -12,11 +12,14 @@ import json
 import logging
 import os
 import re
+import sys
+from pathlib import Path
 from typing import AsyncIterator, Protocol
 
 from .redaction import redact_secrets
 
 log = logging.getLogger("gate.colab")
+EXEC_GRACE_S = 15
 
 
 class ColabError(RuntimeError):
@@ -42,8 +45,11 @@ class ColabRunner(Protocol):
 
 
 class ColabCLI:
-    def __init__(self, binary: str = "colab", token_dir: str = ""):
+    def __init__(self, binary: str = "colab", token_dir: str = "", *,
+                 exec_python: str = "", connect_timeout_s: float = 45):
         self.binary = binary
+        self.exec_python = exec_python or sys.executable
+        self.connect_timeout_s = connect_timeout_s
         self.env = dict(os.environ)
         if token_dir:
             # google-colab-cli keeps its token under ~/.config/colab-cli; point HOME-relative config there
@@ -136,14 +142,14 @@ class ColabCLI:
 
     async def exec_stream(self, name: str, code: str, timeout_s: int):
         proc = await asyncio.create_subprocess_exec(
-            self.binary,
-            "--auth",
-            "oauth2",
-            "exec",
-            "-s",
+            self.exec_python,
+            str(Path(__file__).with_name("colab_exec.py")),
+            "--session",
             name,
             "--timeout",
             str(timeout_s),
+            "--connect-timeout",
+            str(self.connect_timeout_s),
             env=self.env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -151,21 +157,31 @@ class ColabCLI:
         )
         try:
             assert proc.stdin and proc.stdout
+            # Setup/auth/handshake must not consume the task's execution budget.
+            # Each phase is bounded; duplicate markers cannot extend a deadline.
+            connected = False
+            deadline = asyncio.get_running_loop().time() + self.connect_timeout_s + EXEC_GRACE_S
             proc.stdin.write(code.encode())
-            await proc.stdin.drain()
+            await asyncio.wait_for(proc.stdin.drain(), max(0.0, deadline - asyncio.get_running_loop().time()))
             proc.stdin.close()
-            # The CLI's notebook timeout is not a local process deadline.
-            deadline = asyncio.get_running_loop().time() + timeout_s + 15
             while True:
                 remaining = max(0.0, deadline - asyncio.get_running_loop().time())
                 raw = await asyncio.wait_for(proc.stdout.readline(), remaining)
                 if not raw:
                     break
                 line = redact_secrets(raw.decode(errors="replace").rstrip("\n"))
+                if line == "KIT_COLAB_EXEC_READY":
+                    if not connected:
+                        connected = True
+                        deadline = asyncio.get_running_loop().time() + timeout_s + EXEC_GRACE_S
+                    continue
+                if "KIT_COLAB_CODE_ERROR:" in line:
+                    raise ColabError(f"Colab remote code failed: {line}")
                 # CLI 0.7.5 can leave non-daemon Jupyter threads alive when
                 # its preliminary exec fails before entering runtime.stop().
                 # Preserve the cause and reap the owned child immediately.
                 if any(marker in line for marker in (
+                    "KIT_COLAB_CONNECTION_ERROR:",
                     "RuntimeError: Connection was lost.",
                     "ExecutionError: Execution did not complete",
                     "WebSocketConnectionClosedException:",
@@ -176,6 +192,8 @@ class ColabCLI:
             rc = await asyncio.wait_for(proc.wait(), remaining)
             if rc:
                 raise ColabError(f"colab exec exited with {rc}")
+            if not connected:
+                raise ColabConnectionError("Colab execution readiness confirmation missing; task not confirmed")
         except asyncio.TimeoutError as e:
             # A local deadline does not cancel remote notebook execution.
             # The dispatcher must fail closed, never start a queued graph on it.
@@ -194,8 +212,10 @@ class ColabCLI:
     async def check_ready(self, name: str) -> bool:
         try:
             code = "import os; print('KIT_OK' if os.path.isfile('/content/kit/runtime_config.json') else 'KIT_MISSING')\n"
-            out = await self._run("exec", "-s", name, "--timeout", "15", stdin=code, timeout=20)
-            return "KIT_OK" in out
+            confirmed = False
+            async for line in self.exec_stream(name, code, 15):
+                confirmed |= line == "KIT_OK"
+            return confirmed
         except Exception as e:
             log.warning("check_ready via colab exec failed: %s", e)
             return False

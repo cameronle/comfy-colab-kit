@@ -114,6 +114,8 @@ class Settings:
     hf_token_file: str = ""
     agent_token_file: str = ""
     colab_bin: str = "colab"
+    colab_exec_python: str = ""
+    colab_connect_timeout_s: int = 45
     colab_token_dir: str = ""
     colab_accelerator: str = "L4"
     colab_session_name: str = "comfy"
@@ -188,6 +190,8 @@ class Settings:
             hf_token_file=(env.get("HF_TOKEN_FILE") or "").strip(),
             agent_token_file=(env.get("AGENT_TOKEN_FILE") or "").strip(),
             colab_bin=(env.get("COLAB_BIN") or "colab").strip(),
+            colab_exec_python=(env.get("COLAB_EXEC_PYTHON") or "").strip(),
+            colab_connect_timeout_s=_int(env, "COLAB_CONNECT_TIMEOUT_S", 45, 1),
             colab_token_dir=(env.get("COLAB_TOKEN_DIR") or "").strip(),
             colab_accelerator=(env.get("COLAB_ACCELERATOR") or "L4").strip(),
             colab_session_name=(env.get("COLAB_SESSION_NAME") or "comfy").strip(),

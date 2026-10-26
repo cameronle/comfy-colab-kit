@@ -9,6 +9,7 @@ dependencies = ["aiohttp>=3.9", "pyyaml>=6", "pyjwt[crypto]>=2.8"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "jsonschema>=4.21"]
+colab = ["google-colab-cli==0.7.5"]
 
 [project.scripts]
 comfy-gate = "gate.app:main"

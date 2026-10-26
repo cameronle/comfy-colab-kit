@@ -907,7 +907,11 @@ def build_app(
     app[PROFILE_ERRORS] = errors
     app[JWKS] = JWKSCache(settings.cf_access_team_domain, _fetch_json) if settings.cf_access_team_domain else None
     app[AGENT_TOKEN] = read_secret_file(settings.agent_token_file)
-    session = Session(settings, profiles, colab or ColabCLI(settings.colab_bin, settings.colab_token_dir))
+    session = Session(settings, profiles, colab or ColabCLI(
+        settings.colab_bin, settings.colab_token_dir,
+        exec_python=settings.colab_exec_python,
+        connect_timeout_s=settings.colab_connect_timeout_s,
+    ))
     session.restore()
     app[SESSION] = session
     batch = BatchDispatcher(settings, session)

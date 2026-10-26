@@ -10,7 +10,7 @@ jobs:
         with: {python-version: "3.12"}
       - uses: actions/setup-node@v4
         with: {node-version: "22"}
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,colab]"
       # the architecture diagram is laid out by Graphviz (WebAssembly build)
       - run: npm ci
       - run: python -m pytest -q
