@@ -20,9 +20,15 @@ class Ledger:
     def load(path: Path) -> "Ledger":
         led = Ledger(path=path)
         if path.is_file():
-            d = json.loads(path.read_text())
-            led.per_day = {k: float(v) for k, v in d.get("per_day", {}).items()}
-            led.balance = d.get("balance")
+            try:
+                raw = path.read_text().strip()
+                if raw:
+                    d = json.loads(raw)
+                    if isinstance(d, dict):
+                        led.per_day = {k: float(v) for k, v in d.get("per_day", {}).items() if isinstance(v, (int, float, str))}
+                        led.balance = d.get("balance")
+            except (json.JSONDecodeError, OSError, ValueError):
+                pass
         return led
 
     def save(self) -> None:
